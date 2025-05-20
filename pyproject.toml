@@ -1,0 +1,22 @@
+[project]
+name = "topic-extractor"
+version = "0.1.0"
+description = "Extract topics from a text based on demographics"
+readme = "README.md"
+authors = [
+    { name = "Kent Nolan", email = "kent.nolan@gmail.com"},
+    { name = "Pedro Mroninski", email = "pedro.mroninski@gmail.com"}
+]
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "beautifulsoup4>=4.13.4",
+    "lxml>=5.4.0",
+    "polars>=1.29.0",
+]
+
+[project.scripts]
+topic_extractor = "topic_extractor:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
