@@ -25,6 +25,7 @@ dependencies = [
     "sentence-transformers>=4.1.0",
     "spacy>=3.8.7",
     "nltk>=3.9.1",
+    "deep-translator[ai]>=1.11.4",
 ]
 
 [project.scripts]
