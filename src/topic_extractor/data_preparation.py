@@ -1,11 +1,12 @@
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional
 
 import polars as pl
 from bs4 import BeautifulSoup
 from datetime import datetime
+import dateparser
 
 
 class BlogDataProcessor:
@@ -17,6 +18,33 @@ class BlogDataProcessor:
             data_directory: Path to directory containing XML blog files
         """
         self.data_directory = data_directory
+
+    def _parse_multilingual_date(self, date_string: str) -> Optional[datetime]:
+        """
+        Parse dates with month names in multiple languages using dateutil.
+        This is a fuzzy method, so the precision might be slightly low but this is a low priority task.
+
+        Args:
+            date_string: Date string in format "day,month_name,year"
+
+        Returns:
+            datetime object if parsing succeeds, None otherwise
+        """
+        try:
+            # Replace commas with spaces for better parsing
+            normalized_date = date_string.replace(",", " ").strip()
+
+            # Use dateutil's fuzzy parser which can handle many different formats
+            # and languages automatically
+            parsed_date = dateparser.parse(
+                normalized_date, settings={"DATE_ORDER": "DMY"}
+            )
+
+            return parsed_date
+
+        except (ValueError, TypeError) as e:
+            print(f"Error parsing date '{date_string}': {e}")
+            return None
 
     def files_dataframe(self) -> pl.LazyFrame:
         """
@@ -110,7 +138,7 @@ class BlogDataProcessor:
 
                 # Make the date into a datetime object
                 if date != "":
-                    date = datetime.strptime(date, "%d,%B,%Y")
+                    date = self._parse_multilingual_date(date)
 
                 posts_data.append({"date": date, "content": content})
 
