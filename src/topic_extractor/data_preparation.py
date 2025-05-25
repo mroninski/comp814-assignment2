@@ -19,7 +19,7 @@ class BlogDataProcessor:
         """
         self.data_directory = data_directory
 
-    def _parse_multilingual_date(self, date_string: str) -> Optional[datetime]:
+    def _parse_multilingual_date(self, date_string: str) -> Optional[float]:
         """
         Parse dates with month names in multiple languages using dateutil.
         This is a fuzzy method, so the precision might be slightly low but this is a low priority task.
@@ -40,7 +40,10 @@ class BlogDataProcessor:
                 normalized_date, settings={"DATE_ORDER": "DMY"}
             )
 
-            return parsed_date
+            if parsed_date is None:
+                return None
+
+            return parsed_date.timestamp()
 
         except (ValueError, TypeError) as e:
             print(f"Error parsing date '{date_string}': {e}")
@@ -60,11 +63,13 @@ class BlogDataProcessor:
         files_df = pl.LazyFrame({"file_path": file_paths})
 
         def extract_filename(file_path: Path) -> str:
-            return file_path.stem
+            return str(file_path.stem)
 
         # Extract filename without path
         files_df = files_df.with_columns(
-            pl.col("file_path").map_elements(extract_filename).alias("filename")
+            pl.col("file_path")
+            .map_elements(extract_filename, return_dtype=pl.Utf8)
+            .alias("filename")
         ).collect()
 
         # Extract metadata from filenames
@@ -78,6 +83,9 @@ class BlogDataProcessor:
             .list.get(4)
             .str.replace(r"\.xml$", "")
             .alias("star_sign"),
+            pl.col("file_path")
+            .map_elements(lambda x: str(x.resolve()), return_dtype=pl.Utf8)
+            .alias("file_path"),
         ])
 
         # Generate ID by hashing concatenated metadata
@@ -89,7 +97,7 @@ class BlogDataProcessor:
                 pl.col("industry"),
                 pl.col("star_sign"),
             )
-            .map_elements(lambda s: hash(tuple(s)))
+            .map_elements(lambda s: hash(tuple(s)), return_dtype=pl.Int64)
             .alias("id")
         )
 
@@ -164,11 +172,11 @@ class BlogDataProcessor:
         posts_data = []
 
         for row in files_data.iter_rows(named=True):
-            file_id = row["id"]
-            file_path = row["file_path"]
+            file_id: str = row["id"]
+            file_path: str = row["file_path"]
 
             # Parse XML file safely
-            file_posts = self._safe_parse_xml(str(file_path.resolve()))
+            file_posts = self._safe_parse_xml(file_path)
 
             # Add file_id to each post
             for post in file_posts:
@@ -183,8 +191,16 @@ class BlogDataProcessor:
         Transform the posts dataframe to include the date as a datetime object.
         """
         return posts_df.with_columns(
-            pl.col("date").map_elements(self._parse_multilingual_date).alias("date")
+            pl.col("date")
+            .map_elements(self._parse_multilingual_date, return_dtype=pl.Float64)
+            .alias("date")
         )
+
+    def save_lazyframe(self, lazyframe: pl.LazyFrame, path: str) -> None:
+        """
+        Save the lazyframe to a parquet file.
+        """
+        lazyframe.sink_parquet(path=path, statistics=True, mkdir=True)
 
     def create_dataframes(self) -> Tuple[pl.LazyFrame, pl.LazyFrame]:
         """
@@ -210,15 +226,13 @@ if __name__ == "__main__":
         data_directory="/Users/t834527/Repos/comp814-assignment2/.data/blogs"
     )
     files_df, posts_df = data_processor.create_dataframes()
-    print(files_df)
-    print(posts_df)
+
+    # Save the dataframes to parquet files
+    data_processor.save_lazyframe(files_df, ".data/tables/files_df")
+    data_processor.save_lazyframe(posts_df, ".data/tables/posts_df")
 
     # Join the two dataframes on the file_id column
     joined_df = posts_df.join(files_df, left_on="file_id", right_on="id", how="left")
 
     # Save the dataframe to a parquet file
-    joined_df.sink_parquet(
-        path=".data/tables/joined_df.parquet", statistics=True, mkdir=True
-    )
-
-    print(joined_df)
+    joined_df.sink_parquet(path=".data/tables/joined_df", statistics=True, mkdir=True)
