@@ -59,9 +59,12 @@ class BlogDataProcessor:
         # Create initial dataframe with file paths
         files_df = pl.LazyFrame({"file_path": file_paths})
 
+        def extract_filename(file_path: Path) -> str:
+            return file_path.stem
+
         # Extract filename without path
         files_df = files_df.with_columns(
-            pl.col("file_path").map_elements(lambda x: x.stem).alias("filename")
+            pl.col("file_path").map_elements(extract_filename).alias("filename")
         ).collect()
 
         # Extract metadata from filenames
@@ -136,10 +139,6 @@ class BlogDataProcessor:
                 date = date_elem.text.strip() if date_elem.text else ""
                 content = post_elem.text.strip() if post_elem.text else ""
 
-                # Make the date into a datetime object
-                if date != "":
-                    date = self._parse_multilingual_date(date)
-
                 posts_data.append({"date": date, "content": content})
 
             return posts_data
@@ -179,6 +178,14 @@ class BlogDataProcessor:
         # Create posts dataframe
         return pl.LazyFrame(posts_data)
 
+    def _transform_posts_dataframe(self, posts_df: pl.LazyFrame) -> pl.LazyFrame:
+        """
+        Transform the posts dataframe to include the date as a datetime object.
+        """
+        return posts_df.with_columns(
+            pl.col("date").map_elements(self._parse_multilingual_date).alias("date")
+        )
+
     def create_dataframes(self) -> Tuple[pl.LazyFrame, pl.LazyFrame]:
         """
         Create files and posts dataframes.
@@ -190,7 +197,10 @@ class BlogDataProcessor:
         files_df = self.files_dataframe()
 
         # Create posts dataframe
-        posts_df = self.posts_dataframe(files_df)
+        raw_posts_df = self.posts_dataframe(files_df)
+
+        # Transform posts dataframe
+        posts_df = self._transform_posts_dataframe(raw_posts_df)
 
         return files_df, posts_df
 
@@ -205,4 +215,10 @@ if __name__ == "__main__":
 
     # Join the two dataframes on the file_id column
     joined_df = posts_df.join(files_df, left_on="file_id", right_on="id", how="left")
+
+    # Save the dataframe to a parquet file
+    joined_df.sink_parquet(
+        path=".data/tables/joined_df.parquet", statistics=True, mkdir=True
+    )
+
     print(joined_df)
