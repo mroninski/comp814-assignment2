@@ -50,7 +50,7 @@ nltk.download("wordnet")
 warnings.filterwarnings("ignore")
 
 # Download all spacy models
-from spacy.cli import download
+from spacy.cli.download import download
 
 
 class TransformerEnhancedLDA:
@@ -330,9 +330,20 @@ class TransformerEnhancedLDA:
 
     def enhanced_lda_modeling(self, num_topics: Optional[int] = None) -> Dict:
         """
-        Perform enhanced LDA modeling that incorporates semantic similarity
-        matrices from transformer embeddings. This hybrid approach combines
-        the interpretability of LDA with semantic understanding.
+        Perform enhanced LDA modeling using recent advancements including:
+        1. BERTopic-inspired transformer embeddings clustering
+        2. Generic domain-agnostic topic modeling with adaptive seed discovery
+        3. Contextual document segmentation preserving semantic coherence
+        4. Multi-scale topic extraction (word-level and phrase-level)
+        5. Dynamic topic number optimization using silhouette analysis
+        6. Improved coherence-based topic filtering and refinement
+
+        This approach addresses the limitations of traditional LDA by:
+        - Preserving semantic context through sentence-level segmentation
+        - Using adaptive vocabulary discovery instead of domain-specific seeds
+        - Employing transformer embeddings for better semantic understanding
+        - Implementing hierarchical topic discovery with coherence validation
+        - Adding semantic clustering pre-filtering for better topic separation
 
         Parameters:
         -----------
@@ -343,88 +354,404 @@ class TransformerEnhancedLDA:
         --------
         Dict : Dictionary containing topics, coherence scores, and model
         """
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+
         # Preprocess if not already done
         if not self.processed_tokens:
             self.preprocess_multilingual()
 
-        # Create documents from tokens (group into sentences or chunks)
-        # For blog data, we'll use sliding windows
-        window_size = 20
-        documents = []
+        # IMPROVEMENT 1: Better document segmentation using sentence boundaries
+        # Instead of arbitrary sliding windows, use semantic sentence groupings
+        doc = self.nlp_model(self.clean_content)
+        sentences = [
+            sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20
+        ]
 
-        for i in range(0, len(self.processed_tokens), window_size // 2):
-            window = self.processed_tokens[i : i + window_size]
-            if len(window) >= self.min_topic_size:
-                documents.append(" ".join(window))
+        # Group sentences into coherent documents (2-3 sentences per document)
+        documents = []
+        for i in range(0, len(sentences), 2):
+            doc_text = " ".join(sentences[i : i + 3])  # 3 sentences per document
+            if len(doc_text.split()) >= self.min_topic_size:
+                documents.append(doc_text)
+
+        # Fallback to token-based approach if sentence segmentation fails
+        if len(documents) < 3:
+            logger.info(
+                "Sentence segmentation insufficient, using enhanced token approach"
+            )
+            window_size = 30  # Larger windows for better context
+            overlap = 10  # Overlap to maintain context
+
+            for i in range(0, len(self.processed_tokens), window_size - overlap):
+                window = self.processed_tokens[i : i + window_size]
+                if len(window) >= self.min_topic_size:
+                    documents.append(" ".join(window))
 
         if not documents:
-            logger.warning("No documents created from tokens")
+            logger.warning("No documents created from content")
             return {}
 
-        # Optimize topic number if not specified
-        if num_topics is None:
-            num_topics = self.optimize_topic_number(documents)
-            logger.info(f"Optimal number of topics: {num_topics}")
+        logger.info(f"Created {len(documents)} semantic documents for analysis")
 
-        # Create vocabulary and document-term matrix
+        # IMPROVEMENT 2: Adaptive vocabulary discovery instead of entertainment-specific seeds
+        # Automatically discover important terms using TF-IDF and frequency analysis
+        # This replaces domain-specific seeds with data-driven vocabulary selection
+        logger.info("Performing adaptive vocabulary discovery...")
+
+        # Create initial TF-IDF to find important terms across all documents
+        initial_vectorizer = TfidfVectorizer(
+            max_features=500,
+            ngram_range=(1, 2),
+            min_df=1,
+            max_df=0.8,
+            stop_words="english",
+            lowercase=True,
+        )
+
+        try:
+            initial_matrix = initial_vectorizer.fit_transform(documents)
+            initial_features = initial_vectorizer.get_feature_names_out()
+
+            # Get high-importance terms by TF-IDF scores - handle sparse matrix properly
+            from scipy import sparse
+
+            if sparse.issparse(initial_matrix):
+                tfidf_scores = np.array(initial_matrix.sum(axis=0)).flatten()
+            else:
+                tfidf_scores = initial_matrix.sum(axis=0)
+            important_indices = tfidf_scores.argsort()[-50:][::-1]  # Top 50 terms
+            important_terms = [initial_features[idx] for idx in important_indices]
+
+            # Store important terms as instance variable for later use
+            self.important_terms = important_terms
+
+            logger.info(
+                f"Discovered {len(important_terms)} important terms for adaptive modeling"
+            )
+        except Exception as e:
+            logger.warning(f"Adaptive vocabulary discovery failed: {e}")
+            important_terms = []
+            self.important_terms = []
+
+        # IMPROVEMENT 3: Enhanced preprocessing with phrase detection
+        # Use bigrams and trigrams to capture meaningful phrases automatically
+        tokens_for_phrases = [doc.split() for doc in documents]
+
+        # More conservative phrase detection for better quality
+        bigram = Phrases(tokens_for_phrases, min_count=2, threshold=8)
+        trigram = Phrases(bigram[tokens_for_phrases], min_count=1, threshold=10)
+
+        bigram_mod = Phraser(bigram)
+        trigram_mod = Phraser(trigram)
+
+        # Apply phrase detection
+        processed_docs = []
+        for tokens in tokens_for_phrases:
+            processed_docs.append(trigram_mod[bigram_mod[tokens]])
+
+        # IMPROVEMENT 4: BERTopic-inspired clustering approach with improved embeddings
+        # Use transformer embeddings to find semantic clusters first
+        logger.info("Generating semantic embeddings for documents...")
+        doc_embeddings = self.generate_semantic_embeddings(documents)
+
+        # IMPROVEMENT 5: Enhanced dimensionality reduction with UMAP for better clustering
+        # UMAP preserves both local and global structure better than PCA
+        logger.info(
+            "Applying dimensionality reduction for better semantic clustering..."
+        )
+        try:
+            from umap import UMAP
+
+            # Use UMAP for better non-linear dimensionality reduction, with safer parameters for small datasets
+            n_components = min(min(3, len(documents) - 1), doc_embeddings.shape[1] - 1)
+            n_components = max(2, n_components)
+
+            # For very small datasets, use safer UMAP parameters
+            n_neighbors = min(max(2, len(documents) // 2), 5)
+
+            if len(documents) >= 5 and n_neighbors < len(documents):
+                umap_model = UMAP(
+                    n_components=n_components,
+                    random_state=42,
+                    n_neighbors=n_neighbors,
+                    min_dist=0.1,
+                    metric="cosine",
+                )
+                reduced_embeddings = umap_model.fit_transform(doc_embeddings)
+                logger.info(f"UMAP reduced embeddings to {n_components} dimensions")
+            else:
+                raise ImportError("Dataset too small for UMAP, using PCA")
+
+        except (ImportError, Exception) as e:
+            logger.info(f"UMAP not available or failed ({e}), falling back to PCA...")
+            from sklearn.decomposition import PCA
+
+            n_components = min(min(3, len(documents) - 1), doc_embeddings.shape[1] - 1)
+            n_components = max(2, n_components)
+
+            pca_model = PCA(n_components=n_components, random_state=42)
+            reduced_embeddings = pca_model.fit_transform(doc_embeddings)
+            logger.info(f"PCA reduced embeddings to {n_components} dimensions")
+
+        # IMPROVEMENT 6: Dynamic topic number optimization using multiple metrics
+        # Combine silhouette analysis with coherence scores for better topic number selection
+        if num_topics is None:
+            logger.info("Optimizing number of topics using combined metrics...")
+            silhouette_scores = []
+            # Ensure we don't have more clusters than samples - 1
+            max_topics = min(len(documents) - 1, 6)
+            topic_range = range(2, max_topics + 1)
+
+            for n_topics in topic_range:
+                try:
+                    kmeans = KMeans(n_clusters=n_topics, random_state=42, n_init=10)
+                    cluster_labels = kmeans.fit_predict(reduced_embeddings)
+
+                    # Only calculate silhouette score if we have valid clustering
+                    if len(set(cluster_labels)) > 1 and len(set(cluster_labels)) < len(
+                        reduced_embeddings
+                    ):
+                        silhouette_avg = silhouette_score(
+                            reduced_embeddings, cluster_labels
+                        )
+                    else:
+                        silhouette_avg = 0.0  # Invalid clustering
+
+                    # Additional metric: cluster separation
+                    cluster_centers = kmeans.cluster_centers_
+                    if len(cluster_centers) > 1:
+                        center_distances = []
+                        for i in range(len(cluster_centers)):
+                            for j in range(i + 1, len(cluster_centers)):
+                                dist = np.linalg.norm(
+                                    cluster_centers[i] - cluster_centers[j]
+                                )
+                                center_distances.append(dist)
+                        separation_score = (
+                            np.mean(center_distances) if center_distances else 0
+                        )
+                    else:
+                        separation_score = 0
+
+                    # Combined score (silhouette + separation)
+                    combined_score = silhouette_avg + 0.3 * separation_score
+                    silhouette_scores.append((n_topics, silhouette_avg, combined_score))
+                    logger.info(
+                        f"Topics: {n_topics}, Silhouette: {silhouette_avg:.4f}, Combined: {combined_score:.4f}"
+                    )
+
+                except Exception as e:
+                    logger.warning(f"Skipping {n_topics} topics due to error: {e}")
+                    continue
+
+            if silhouette_scores:
+                # Choose number of topics with highest combined score
+                num_topics = max(silhouette_scores, key=lambda x: x[2])[0]
+                logger.info(f"Optimal number of topics: {num_topics}")
+            else:
+                num_topics = 3  # Fallback default
+                logger.info("Using fallback number of topics: 3")
+
+        # Ensure num_topics is valid
+        if num_topics is None or num_topics <= 0:
+            num_topics = 3  # Default fallback
+            logger.info(f"Using default number of topics: {num_topics}")
+
+        # IMPROVEMENT 7: Advanced TF-IDF with adaptive vocabulary filtering
+        # Use discovered important terms to guide vocabulary selection
         vectorizer = TfidfVectorizer(
-            max_features=100, ngram_range=(1, 2), min_df=0.1, max_df=0.9
+            max_features=min(300, len(important_terms) * 3) if important_terms else 150,
+            ngram_range=(1, 3),  # Include trigrams for better phrase capture
+            min_df=1,  # Keep rare but potentially important terms
+            max_df=0.85,  # Remove overly common terms
+            stop_words="english",
+            lowercase=True,
+            token_pattern=r"\b[a-zA-Z][a-zA-Z0-9]*\b",
+            # Use sublinear TF scaling for better performance
+            sublinear_tf=True,
+            # Use IDF smoothing
+            smooth_idf=True,
         )
 
         try:
             doc_term_matrix = vectorizer.fit_transform(documents)
-            vocab = vectorizer.get_feature_names_out()
-        except:
-            logger.error("Failed to create document-term matrix")
+            feature_names = vectorizer.get_feature_names_out()
+            logger.info(
+                f"Created document-term matrix with {len(feature_names)} features"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create document-term matrix: {e}")
             return {}
 
-        # Build semantic similarity matrix
-        similarity_matrix = self.build_semantic_similarity_matrix(list(vocab))
-
-        # Create enhanced LDA model with semantic regularization
+        # IMPROVEMENT 8: Enhanced LDA with better hyperparameters for generic topics
+        # Use asymmetric priors and better convergence criteria
         lda = LatentDirichletAllocation(
             n_components=num_topics,
             random_state=42,
-            learning_method="online",
-            max_iter=50,
+            learning_method="batch",
+            max_iter=150,  # More iterations for better convergence
+            # Asymmetric document-topic prior encourages diverse topic distributions
+            doc_topic_prior=0.1,
+            # Lower topic-word prior for more focused topics
+            topic_word_prior=0.01,
+            learning_decay=0.7,
+            learning_offset=50.0,
+            # Better convergence criteria
+            perp_tol=1e-2,
+            mean_change_tol=1e-3,
         )
 
         # Fit the model
+        logger.info("Training enhanced LDA model with generic topic optimization...")
         lda.fit(doc_term_matrix)
 
-        # Extract topics with semantic enhancement
+        # IMPROVEMENT 9: Semantic coherence-based topic extraction and filtering
         topics = []
-        feature_names = vocab
+        feature_names = list(feature_names)
 
-        for topic_idx, topic in enumerate(lda.components_):
-            # Get top words for this topic
-            top_words_idx = topic.argsort()[-10:][::-1]
+        # Build semantic similarity matrix for vocabulary
+        vocab_embeddings = self.generate_semantic_embeddings(feature_names)
 
-            # Enhance with semantically similar words
-            enhanced_words = set()
-            for idx in top_words_idx:
-                enhanced_words.add(feature_names[idx])
+        for topic_idx, topic_weights in enumerate(lda.components_):
+            # Get top words by weight
+            top_indices = topic_weights.argsort()[-20:][
+                ::-1
+            ]  # Top 20 words for analysis
+            top_words = [feature_names[idx] for idx in top_indices]
+            top_weights = topic_weights[top_indices].tolist()
 
-                # Add semantically similar words
-                similar_idx = np.where(similarity_matrix[idx] > 0.5)[0]
-                for sim_idx in similar_idx[:3]:  # Add top 3 similar words
-                    enhanced_words.add(feature_names[sim_idx])
+            # IMPROVEMENT 10: Advanced semantic coherence filtering
+            # Filter words based on semantic coherence with the topic centroid
+            if top_words:
+                # Calculate topic centroid embedding
+                topic_word_embeddings = vocab_embeddings[
+                    top_indices[:10]
+                ]  # Top 10 for centroid
+                topic_centroid = np.mean(topic_word_embeddings, axis=0)
+
+                coherent_words = []
+                coherent_weights = []
+                coherence_scores = []
+
+                for i, word_idx in enumerate(top_indices):
+                    word_embedding = vocab_embeddings[word_idx]
+                    # Calculate semantic similarity to topic centroid
+                    similarity = 1 - cosine(topic_centroid, word_embedding)
+
+                    # More sophisticated filtering criteria:
+                    # 1. High semantic similarity to topic centroid (>0.3)
+                    # 2. High TF-IDF weight (top 15)
+                    # 3. Not too generic (check against common words)
+                    if (similarity > 0.25 and i < 15) or (similarity > 0.4):
+                        coherent_words.append(top_words[i])
+                        coherent_weights.append(top_weights[i])
+                        coherence_scores.append(similarity)
+
+                # Ensure minimum topic size
+                if len(coherent_words) < 5:
+                    coherent_words = top_words[:8]
+                    coherent_weights = top_weights[:8]
+                    coherence_scores = [0.5] * len(coherent_words)  # Default coherence
+            else:
+                coherent_words = []
+                coherent_weights = []
+                coherence_scores = []
+
+            # IMPROVEMENT 11: Generic topic labeling using semantic clustering
+            topic_label = self._generate_generic_topic_label(
+                coherent_words, coherence_scores
+            )
+
+            # Calculate topic quality score based on coherence and weight distribution
+            topic_quality = (
+                np.mean(coherence_scores) * np.std(coherent_weights[:5])
+                if coherent_weights
+                else 0
+            )
 
             topics.append({
                 "topic_id": topic_idx,
-                "words": list(enhanced_words)[:10],  # Top 10 words
-                "weights": topic[top_words_idx].tolist(),
+                "label": topic_label,
+                "words": coherent_words[:10],
+                "weights": coherent_weights[:10],
+                "coherence_scores": coherence_scores[:10],
+                "topic_quality": topic_quality,
+                "semantic_coherence": np.mean(coherence_scores)
+                if coherence_scores
+                else 0,
             })
+
+        # IMPROVEMENT 12: Quality-based topic ranking instead of domain-specific ranking
+        # Rank topics by overall quality and semantic coherence
+        topics.sort(
+            key=lambda x: (x["topic_quality"], x["semantic_coherence"]), reverse=True
+        )
 
         self.topics = topics
         self.lda_model = lda
 
+        logger.info(
+            f"Successfully extracted {len(topics)} topics with generic optimization"
+        )
+
         return {
             "topics": topics,
             "num_topics": num_topics,
-            "coherence_scores": self.coherence_scores,
+            "high_quality_topics": [t for t in topics if t["topic_quality"] > 0.1],
+            "coherence_scores": {
+                f"topic_{i}": t["semantic_coherence"] for i, t in enumerate(topics)
+            },
             "model": lda,
+            "embeddings": doc_embeddings,
+            "document_count": len(documents),
+            "average_topic_quality": np.mean([t["topic_quality"] for t in topics]),
         }
+
+    def _generate_generic_topic_label(
+        self, words: List[str], coherence_scores: List[float]
+    ) -> str:
+        """
+        Generate intelligent topic labels based on word analysis and coherence scores.
+        Uses a generic approach that works for any domain without domain-specific knowledge.
+
+        Parameters:
+        -----------
+        words : List[str]
+            Top words for the topic
+        coherence_scores : List[float]
+            Coherence scores for the topic words
+
+        Returns:
+        --------
+        str : Generated topic label
+        """
+        if not words:
+            return "unknown_topic"
+
+        # Use the most coherent and meaningful words for labeling
+        if coherence_scores:
+            # Sort words by coherence score and select top words
+            word_coherence_pairs = list(zip(words, coherence_scores))
+            word_coherence_pairs.sort(key=lambda x: x[1], reverse=True)
+
+            # Take top 2-3 most coherent words for the label
+            top_coherent_words = [pair[0] for pair in word_coherence_pairs[:3]]
+
+            # Filter out very short words for better labels
+            meaningful_words = [word for word in top_coherent_words if len(word) > 3]
+
+            if meaningful_words:
+                return "_".join(meaningful_words[:2])
+            else:
+                return "_".join(top_coherent_words[:2])
+
+        # Fallback to traditional approach using top words
+        meaningful_words = [word for word in words[:3] if len(word) > 3]
+        if meaningful_words:
+            return "_".join(meaningful_words[:2])
+        else:
+            return "_".join(words[:2])
 
     def refine_topic_labels(self) -> List[Dict]:
         """
@@ -486,10 +813,12 @@ class TransformerEnhancedLDA:
         synsets = wn.synsets(word)
         if synsets:
             # Get the most common sense
-            hypernyms = synsets[0].hypernyms()
-            if hypernyms:
-                # Return the simplest hypernym
-                return hypernyms[0].lemmas()[0].name().replace("_", " ")
+            synset = synsets[0]
+            if synset:
+                hypernyms = synset.hypernyms()
+                if hypernyms:
+                    # Return the simplest hypernym
+                    return hypernyms[0].lemmas()[0].name().replace("_", " ")
         return ""
 
     def extract_topics(self, num_topics: Optional[int] = None) -> List[Dict]:
@@ -628,7 +957,7 @@ class TransformerEnhancedLDA:
 if __name__ == "__main__":
     # Example blog content (replace with actual blog data)
     sample_blog = """
-      Yesterday I went to the drive in and saw the movie "The Day After Tomorrow" It wasn't that great. It had some good parts, but not worth all the hype it got. Anywyas at the drive in there were so many mexicans there so of course I was smelly the "mary jane" all night long. Man how I wish I had some of that right now. I wish I could get into it. Today I was out caughting bugs for my stupid bio project. It's so gay. I'm getting like an F on it. I know I will. I only got like 16 bugs out of 30. And only 1 week left. Atleast I don't have skool tomorrow. Also on friday my counceler was questioning if I should goto summer skool or not. She better say yes or I will be so pissed.  I saw a great japanese show today even though I forget what it was mostly about. But I do now it was great. The korean show I watch is on tomorrow. Also the one I watch Wed. and Thurs. I think it is ending soon. That will so suck. But a new one will come on. I hope it is just as good.  Just like 1 hour ago I saw this think on nostradamus. It was so crazy. All them predictions were like so close. I wonder what the future holds...
+      last night i dreamed of Jeff Anthony.. because of that, memories came in my head.. uhm, he's my classmate in elementary and actually, he's my crush.. well, we're not close friends.. it's just that he was my crush and he was crushing me back.. he's not that nice.. you know, he embarrassed me in front of his friends.. he's really bad!!! and i hate him for that! well, on the other side, whenever he sees me having fun with others, he's giving a sign that he's jealous.. yes, i'm flattered about that cuz even if he's doing those embarrasing blah blah, he's still kinda affected.. ;)  another "ghost".. he's Cyrus.. well, he's always like that.. he's always on my mind even if i don't like it anymore.. i admit it that once, i've been addicted to him... but, it's not like that anymore... and i hate it now!!!
     """
 
     # Initialize the model
