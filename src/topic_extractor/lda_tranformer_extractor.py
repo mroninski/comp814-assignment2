@@ -6,51 +6,36 @@ semantic understanding for robust topic extraction from english blog data.
 """
 
 import logging
-
-# Text preprocessing
 import re
 import string
 import warnings
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import nltk
 import numpy as np
 import pandas as pd
-
-# NLP processing
 import spacy
-
-# Topic modeling and NLP utilities
 from gensim import corpora, models
 from gensim.models import CoherenceModel, LdaModel
 from gensim.models.phrases import Phraser, Phrases
 from langdetect import LangDetectException, detect_langs
-
-# For coherence optimization
+from nltk.corpus import wordnet as wn
 from scipy.spatial.distance import cosine
-
-# Sentence transformers for semantic embeddings
 from sentence_transformers import SentenceTransformer
 from sklearn.decomposition import LatentDirichletAllocation
-
-# Scientific computing
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from spacy.cli.download import download
 from spacy.language import Language
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from nltk.corpus import wordnet as wn
-import nltk
-
 nltk.download("wordnet")
 
 
 warnings.filterwarnings("ignore")
-
-# Download all spacy models
-from spacy.cli.download import download
 
 
 class TransformerEnhancedLDA:
@@ -63,35 +48,29 @@ class TransformerEnhancedLDA:
     interpretability compared to traditional approaches.
     """
 
-    def __init__(self, blog_content: str, min_topic_size: int = 5):
+    def __init__(self, min_topic_size: int = 5):
         """
-        Initialize the Transformer-Enhanced LDA model with blog content.
+        Initialize the Transformer-Enhanced LDA model.
 
         Parameters:
         -----------
-        blog_content : str
-            Raw blog post content that may contain noise
         min_topic_size : int
             Minimum number of words required to form a topic (default: 5)
         """
-        self.raw_content = blog_content
         self.min_topic_size = min_topic_size
 
-        # Initialize components
+        # Initialize components that will be populated during processing
         self.detected_languages = []
         self.processed_tokens = []
         self.embeddings = None
         self.lda_model = None
         self.topics = []
         self.coherence_scores = {}
-
-        # Clean and preprocess the content
-        self.clean_content = self._clean_text(blog_content)
+        self.important_terms = []
 
         # Load english language models
         logger.info("Initializing the English language models...")
         self._initialize_models()
-        # self.detect_languages()
 
     def _initialize_models(self):
         """
@@ -157,10 +136,15 @@ class TransformerEnhancedLDA:
 
         return text.strip()
 
-    def detect_languages(self) -> List[Tuple[str, float]]:
+    def detect_languages(self, content: str) -> List[Tuple[str, float]]:
         """
         TODO: Move this to the data transformation step.
         Detect languages present in the blog content with confidence scores.
+
+        Parameters:
+        -----------
+        content : str
+            The blog content to analyze
 
         Returns:
         --------
@@ -168,7 +152,7 @@ class TransformerEnhancedLDA:
         """
         try:
             # Detect languages in the content
-            detected = detect_langs(self.clean_content)
+            detected = detect_langs(content)
             self.detected_languages = [(lang.lang, lang.prob) for lang in detected]
 
             logger.info(f"Detected languages: {self.detected_languages}")
@@ -179,18 +163,23 @@ class TransformerEnhancedLDA:
             self.detected_languages = [("en", 1.0)]
             return self.detected_languages
 
-    def preprocess_multilingual(self) -> List[str]:
+    def preprocess_multilingual(self, content: str) -> List[str]:
         """
         Perform multilingual preprocessing including tokenization, lemmatization,
         and named entity recognition. This method handles multiple languages
         gracefully and extracts meaningful tokens.
+
+        Parameters:
+        -----------
+        content : str
+            The cleaned blog content to preprocess
 
         Returns:
         --------
         List[str] : Preprocessed tokens
         """
         # Process text with spaCy
-        doc = self.nlp_model(self.clean_content)
+        doc = self.nlp_model(content)
 
         # Extract meaningful tokens
         tokens = []
@@ -328,7 +317,9 @@ class TransformerEnhancedLDA:
 
         return optimal_topics
 
-    def enhanced_lda_modeling(self, num_topics: Optional[int] = None) -> Dict:
+    def enhanced_lda_modeling(
+        self, content: str, num_topics: Optional[int] = None
+    ) -> Dict:
         """
         Perform enhanced LDA modeling using recent advancements including:
         1. BERTopic-inspired transformer embeddings clustering
@@ -347,6 +338,8 @@ class TransformerEnhancedLDA:
 
         Parameters:
         -----------
+        content : str
+            The cleaned blog content to analyze
         num_topics : Optional[int]
             Number of topics (if None, will be optimized automatically)
 
@@ -359,11 +352,11 @@ class TransformerEnhancedLDA:
 
         # Preprocess if not already done
         if not self.processed_tokens:
-            self.preprocess_multilingual()
+            self.preprocess_multilingual(content)
 
         # IMPROVEMENT 1: Better document segmentation using sentence boundaries
         # Instead of arbitrary sliding windows, use semantic sentence groupings
-        doc = self.nlp_model(self.clean_content)
+        doc = self.nlp_model(content)
         sentences = [
             sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20
         ]
@@ -417,7 +410,9 @@ class TransformerEnhancedLDA:
             from scipy import sparse
 
             if sparse.issparse(initial_matrix):
-                tfidf_scores = np.array(initial_matrix.sum(axis=0)).flatten()
+                # Convert sparse matrix to dense for sum operation
+                dense_matrix = initial_matrix.toarray()
+                tfidf_scores = dense_matrix.sum(axis=0)
             else:
                 tfidf_scores = initial_matrix.sum(axis=0)
             important_indices = tfidf_scores.argsort()[-50:][::-1]  # Top 50 terms
@@ -512,8 +507,10 @@ class TransformerEnhancedLDA:
                     if len(set(cluster_labels)) > 1 and len(set(cluster_labels)) < len(
                         reduced_embeddings
                     ):
+                        # Ensure reduced_embeddings is a proper numpy array
+                        embeddings_array = np.asarray(reduced_embeddings)
                         silhouette_avg = silhouette_score(
-                            reduced_embeddings, cluster_labels
+                            embeddings_array, cluster_labels
                         )
                     else:
                         silhouette_avg = 0.0  # Invalid clustering
@@ -821,35 +818,65 @@ class TransformerEnhancedLDA:
                     return hypernyms[0].lemmas()[0].name().replace("_", " ")
         return ""
 
-    def extract_topics(self, num_topics: Optional[int] = None) -> List[Dict]:
+    def extract_topics(
+        self, blog_content: str, num_topics: Optional[int] = None
+    ) -> Dict:
         """
         Main method to extract topics from the blog content using the full
         transformer-enhanced LDA pipeline.
 
         Parameters:
         -----------
+        blog_content : str
+            Raw blog post content that may contain noise
         num_topics : Optional[int]
             Number of topics to extract (if None, will be optimized)
 
         Returns:
         --------
-        List[Dict] : Extracted topics with labels and relevant information
+        Dict : Combined results containing extracted topics and evaluation metrics
         """
         logger.info("Starting topic extraction pipeline...")
 
-        # Run the full pipeline
-        results = self.enhanced_lda_modeling(num_topics)
+        # Reset instance variables for new content
+        self.detected_languages = []
+        self.processed_tokens = []
+        self.embeddings = None
+        self.lda_model = None
+        self.topics = []
+        self.coherence_scores = {}
+        self.important_terms = []
 
-        if not results:
+        # Clean and preprocess the content
+        clean_content = self._clean_text(blog_content)
+
+        # Optional: Detect languages (can be used for filtering)
+        self.detect_languages(clean_content)
+
+        # Run the full pipeline
+        modeling_results = self.enhanced_lda_modeling(clean_content, num_topics)
+
+        if not modeling_results:
             logger.error("Topic modeling failed")
-            return []
+            return {}
 
         # Refine topics
         refined_topics = self.refine_topic_labels()
 
+        # Evaluate topics
+        evaluation_results = self.evaluate_topics()
+
         logger.info(f"Extracted {len(refined_topics)} topics successfully")
 
-        return refined_topics
+        # Combine results
+        combined_results = {
+            "extracted_topics": refined_topics,
+            "modeling_results": modeling_results,
+            "evaluation": evaluation_results,
+            "summary": self.get_topic_summary(),
+        }
+
+        return combined_results
 
     def evaluate_topics(self) -> Dict:
         """
@@ -961,12 +988,21 @@ if __name__ == "__main__":
     """
 
     # Initialize the model
-    topic_model = TransformerEnhancedLDA(sample_blog, min_topic_size=8)
+    topic_model = TransformerEnhancedLDA(min_topic_size=8)
 
-    # Extract topics
-    topics = topic_model.extract_topics(num_topics=12)
+    # Extract topics - now returns both topics and evaluation results
+    results = topic_model.extract_topics(sample_blog, num_topics=12)
 
-    # Hierachy of topics
-    htopics = topic_model.evaluate_topics()
+    # Print results
+    print("=" * 50)
+    print("TOPIC EXTRACTION RESULTS")
+    print("=" * 50)
+    print(f"Extracted {len(results.get('extracted_topics', []))} topics")
+    print("\nEvaluation Metrics:")
+    evaluation = results.get("evaluation", {})
+    print(f"Topic Diversity: {evaluation.get('topic_diversity', 'N/A')}")
+    print(f"Average Coherence: {evaluation.get('average_coherence', 'N/A')}")
+    print(f"Semantic Consistency: {evaluation.get('semantic_consistency', 'N/A')}")
 
-    print(htopics)
+    print("\nSummary:")
+    print(results.get("summary", "No summary available"))
