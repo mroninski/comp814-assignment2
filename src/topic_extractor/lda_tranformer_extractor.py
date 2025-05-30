@@ -1,8 +1,8 @@
 """
-Transformer-Enhanced LDA Topic Modeling with Multilingual Support
+Transformer-Enhanced LDA Topic Modeling for English Blog Data
 
 This module implements a hybrid approach combining traditional LDA with transformer-based
-semantic understanding for robust topic extraction from multilingual blog data.
+semantic understanding for robust topic extraction from english blog data.
 """
 
 import logging
@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-# Multilingual NLP processing
+# NLP processing
 import spacy
 
 # Topic modeling and NLP utilities
@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 
 from nltk.corpus import wordnet as wn
 import nltk
-nltk.download('wordnet')
+
+nltk.download("wordnet")
 
 
 warnings.filterwarnings("ignore")
@@ -51,32 +52,11 @@ warnings.filterwarnings("ignore")
 # Download all spacy models
 from spacy.cli import download
 
-LANGUAGES_MAP = {
-    "en": "en_core_web_sm",
-    "de": "de_core_news_sm",
-    "es": "es_core_news_sm",
-    "fr": "fr_core_news_sm",
-    "it": "it_core_news_sm",
-    "pt": "pt_core_news_sm",
-    "ru": "ru_core_news_sm",
-    "sv": "sv_core_news_sm",
-    "zh": "zh_core_web_sm",
-    "ja": "ja_core_news_sm",
-    "ko": "ko_core_news_sm",
-    "ar": "ar_core_news_sm",
-    "hi": "hi_core_news_sm",
-    "bn": "bn_core_news_sm",
-    "mr": "mr_core_news_sm",
-    "ta": "ta_core_news_sm",
-}
-
-
-
 
 class TransformerEnhancedLDA:
     """
     A hybrid topic modeling approach that combines traditional LDA with transformer-based
-    semantic understanding for improved topic extraction from multilingual blog data.
+    semantic understanding for improved topic extraction from english blog data.
 
     This class implements the methodology described in recent research (Angelov 2020,
     Bianchi et al. 2021) that demonstrates superior performance in topic coherence and
@@ -90,7 +70,7 @@ class TransformerEnhancedLDA:
         Parameters:
         -----------
         blog_content : str
-            Raw blog post content that may contain multiple languages and noise
+            Raw blog post content that may contain noise
         min_topic_size : int
             Minimum number of words required to form a topic (default: 5)
         """
@@ -104,47 +84,28 @@ class TransformerEnhancedLDA:
         self.lda_model = None
         self.topics = []
         self.coherence_scores = {}
-        
+
         # Clean and preprocess the content
         self.clean_content = self._clean_text(blog_content)
 
-        # Load multilingual models
-        logger.info("Initializing multilingual models...")
-        self.detect_languages()
+        # Load english language models
+        logger.info("Initializing the English language models...")
         self._initialize_models()
+        # self.detect_languages()
 
     def _initialize_models(self):
         """
-        Initialize the required NLP models for multilingual processing.
-        This includes language detection, multilingual tokenization, and
+        Initialize the required NLP models for english language processing.
+        This includes language detection, english language tokenization, and
         sentence transformers for semantic embeddings.
         """
-        try:
-            # Initialize multilingual sentence transformer
-            # Using paraphrase-multilingual-MiniLM-L12-v2 for good balance of speed and quality
-            self.sentence_transformer = SentenceTransformer(
-                "paraphrase-multilingual-MiniLM-L12-v2"
-            )
+        self.sentence_transformer = SentenceTransformer("all-mpnet-base-v2")
 
-            # Initialize spaCy models for major languages
-            # We'll use a lightweight multilingual model
-            self.nlp_models = {}
+        # Download english language model if not installed
+        if "en_core_web_sm" not in spacy.util.get_installed_models():
+            download("en_core_web_sm")
 
-            # Try to load multilingual model, fallback to English if not available
-            self.nlp_models = {}
-            try:
-                for lang_details in self.detected_languages:
-                    lang, _ = lang_details
-                    model_name = LANGUAGES_MAP[lang]
-                    self.nlp_models[lang] = spacy.load(model_name)
-            except OSError as e:
-                logger.error(f"Likely missing spaCy model: {model_name}")
-                download(model_name)
-                self.nlp_models[lang] = spacy.load(model_name)
-                logger.info(f"Downloaded spaCy model: {model_name}")
-        except Exception as e:
-            logger.error(f"Error initializing models: {str(e)}")
-            raise
+        self.nlp_model = spacy.load("en_core_web_sm")
 
     def _clean_text(self, text: str) -> str:
         """
@@ -198,6 +159,7 @@ class TransformerEnhancedLDA:
 
     def detect_languages(self) -> List[Tuple[str, float]]:
         """
+        TODO: Move this to the data transformation step.
         Detect languages present in the blog content with confidence scores.
 
         Returns:
@@ -227,29 +189,8 @@ class TransformerEnhancedLDA:
         --------
         List[str] : Preprocessed tokens
         """
-        # Detect languages first
-        if not self.detected_languages:
-            self.detect_languages()
-
-        # Use appropriate spaCy model based on detected language
-        primary_lang = (
-            self.detected_languages[0][0] if self.detected_languages else "en"
-        )
-
-        # Select appropriate model
-        if "multi" in self.nlp_models:
-            nlp = self.nlp_models["multi"]
-        elif primary_lang[:2] in self.nlp_models:
-            nlp = self.nlp_models[primary_lang[:2]]
-        else:
-            nlp = self.nlp_models.get("en", None)
-
-        if nlp is None:
-            logger.error("No NLP model available for preprocessing")
-            return []
-
         # Process text with spaCy
-        doc = nlp(self.clean_content)
+        doc = self.nlp_model(self.clean_content)
 
         # Extract meaningful tokens
         tokens = []
@@ -275,7 +216,7 @@ class TransformerEnhancedLDA:
         entities = [
             ent.text.lower()
             for ent in doc.ents
-            if ent.label_ in ["PERSON", "ORG", "GPE", "PRODUCT"]
+            if ent.label_ in ["PERSON", "ORG", "GPE", "PRODUCT", "LOC"]
         ]
 
         # Combine tokens and entities
@@ -531,7 +472,7 @@ class TransformerEnhancedLDA:
             })
 
         return refined_topics
-    
+
     @staticmethod
     def get_hypernym(word: str) -> str:
         """Using the WordNet corpus, find the hypernym of a word.
@@ -548,8 +489,8 @@ class TransformerEnhancedLDA:
             hypernyms = synsets[0].hypernyms()
             if hypernyms:
                 # Return the simplest hypernym
-                return hypernyms[0].lemmas()[0].name().replace('_', ' ')
-        return ''
+                return hypernyms[0].lemmas()[0].name().replace("_", " ")
+        return ""
 
     def extract_topics(self, num_topics: Optional[int] = None) -> List[Dict]:
         """
@@ -629,7 +570,7 @@ class TransformerEnhancedLDA:
         avg_consistency = (
             np.mean(semantic_consistencies) if semantic_consistencies else 0
         )
-        
+
         # Get the hypernym of the topics
         all_hypernyms = set()
         for topic_details in self.topics:
@@ -649,8 +590,8 @@ class TransformerEnhancedLDA:
         logger.info(f"Evaluation metrics: {evaluation}")
 
         return evaluation
-        
-    def get_topic_summary(self) -> dict[str, Any]:
+
+    def get_topic_summary(self) -> str:
         """
         Generate a human-readable summary of the extracted topics.
 
@@ -680,7 +621,6 @@ class TransformerEnhancedLDA:
         summary += f"  Average Coherence: {evaluation['average_coherence']:.3f}\n"
         summary += f"  Semantic Consistency: {evaluation['semantic_consistency']:.3f}\n"
 
-        print(summary)
         return summary
 
 
@@ -698,6 +638,6 @@ if __name__ == "__main__":
     topics = topic_model.extract_topics(num_topics=12)
 
     # Hierachy of topics
-    htopics =  topic_model.evaluate_topics()
-    
+    htopics = topic_model.evaluate_topics()
+
     print(htopics)

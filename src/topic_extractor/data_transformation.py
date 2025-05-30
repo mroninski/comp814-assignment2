@@ -31,7 +31,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
 
-class TextMiningTransformer:
+class PostsTableTransformation:
     """
     A class for performing text mining transformations on Polars DataFrames.
 
@@ -189,6 +189,9 @@ class TextMiningTransformer:
             # Translate batch
             batch_translated = []
             for row in batch_df.iter_rows(named=True):
+                if row["content_language"] == "en":
+                    batch_translated.append(row["content"])
+                    continue
                 translated = _translate_text(
                     row["content"], row.get("content_language", "unknown")
                 )
@@ -323,19 +326,28 @@ class TextMiningTransformer:
             }
 
         # Apply frequency computation
-        freq_results = self.df[content_column].map_elements(
-            _compute_frequencies,
-            return_dtype=pl.Struct([
-                pl.Field("most_common", pl.List(pl.Utf8)),
-                pl.Field("least_common", pl.List(pl.Utf8)),
-            ]),
+        freq_results = self.df.select(
+            pl.col(content_column).map_elements(
+                _compute_frequencies,
+                return_dtype=pl.Struct([
+                    pl.Field("most_common", pl.List(pl.Utf8)),
+                    pl.Field("least_common", pl.List(pl.Utf8)),
+                ]),
+            )
         )
 
         # Add columns to DataFrame
-        self.df = self.df.with_columns([
-            freq_results.struct.field("most_common").alias("most_common_words"),
-            freq_results.struct.field("least_common").alias("least_common_words"),
-        ])
+        self.df = self.df.with_columns(
+            pl.col(content_column)
+            .map_elements(
+                _compute_frequencies,
+                return_dtype=pl.Struct([
+                    pl.Field("most_common", pl.List(pl.Utf8)),
+                    pl.Field("least_common", pl.List(pl.Utf8)),
+                ]),
+            )
+            .alias("word_frequencies")
+        )
 
         self.logger.info("Word frequency computation completed")
         return self
@@ -378,15 +390,17 @@ if __name__ == "__main__":
     print("\n" + "=" * 50 + "\n")
 
     # Initialize transformer
-    transformer = TextMiningTransformer(df, remove_stopwords=True)
+    transformer = PostsTableTransformation(df, remove_stopwords=True)
 
     # Apply transformations using method chaining
     transformed_df = (
         transformer.detect_language()
-        .translate_to_english()
         .compute_word_frequencies(n_most_common=5, n_least_common=3)
         .get_dataframe()
     )
+
+    # Keep only a random sample of 100 rows
+    transformed_df = transformed_df.limit(400)
 
     print("Transformed DataFrame:")
     print(transformed_df)
@@ -394,11 +408,8 @@ if __name__ == "__main__":
 
     # Display specific columns for clarity
     print("Language Detection Results:")
-    print(transformed_df.select(["content", "content_language"]))
+    print(transformed_df.select(["content", "content_language"]).collect())
     print("\n" + "=" * 50 + "\n")
-
-    print("Translation Results:")
-    print(transformed_df.select(["content", "content_english"]))
     print("\n" + "=" * 50 + "\n")
 
     print("Word Frequency Results:")
