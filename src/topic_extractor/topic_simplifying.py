@@ -114,8 +114,8 @@ class TopicTaxonomyMapper:
                 "partnership",
                 "trust_issues",
             ],
-            "personal_development": [
-                "self_improvement",
+            "personal_views": ["religion", "politics"],
+            "self_improvement": [
                 "goal_setting",
                 "motivation",
                 "confidence_building",
@@ -367,21 +367,6 @@ class TopicTaxonomyMapper:
                 "nature_activities",
                 "environmental_responsibility",
             ],
-            "spirituality_religion": [
-                "faith",
-                "religious_practices",
-                "spiritual_growth",
-                "meditation",
-                "religious_community",
-                "spiritual_beliefs",
-                "religious_traditions",
-                "spiritual_experiences",
-                "religious_studies",
-                "philosophy",
-                "meaning_of_life",
-                "transcendence",
-                "religious_ceremonies",
-            ],
             "news_current_events": [
                 "political_news",
                 "world_events",
@@ -516,9 +501,7 @@ class TopicTaxonomyMapper:
             "lifestyle": [
                 "daily_routines",
                 "life_choices",
-                "lifestyle_changes",
                 "personal_preferences",
-                "life_philosophy",
                 "lifestyle_trends",
                 "quality_of_life",
                 "life_experiences",

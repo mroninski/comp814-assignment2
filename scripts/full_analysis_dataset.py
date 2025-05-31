@@ -74,7 +74,7 @@ def main():
     lda_parsed_df = lda_extracted_df.with_columns(
         pl.col("lda_topics")
         .map_elements(
-            lambda x: json.loads(x).get("words"),
+            lambda x: json.loads(x).get("topic_labels"),
             return_dtype=pl.Utf8,
         )
         .alias("lda_topic_words"),
