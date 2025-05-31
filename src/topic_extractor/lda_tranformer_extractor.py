@@ -797,27 +797,6 @@ class TransformerEnhancedLDA:
 
         return refined_topics
 
-    @staticmethod
-    def get_hypernym(word: str) -> str:
-        """Using the WordNet corpus, find the hypernym of a word.
-
-        Args:
-            word (str): The word to find the hypernym of
-
-        Returns:
-            str: The hypernym of the word
-        """
-        synsets = wn.synsets(word)
-        if synsets:
-            # Get the most common sense
-            synset = synsets[0]
-            if synset:
-                hypernyms = synset.hypernyms()
-                if hypernyms:
-                    # Return the simplest hypernym
-                    return hypernyms[0].lemmas()[0].name().replace("_", " ")
-        return ""
-
     def extract_topics(
         self, blog_content: str, num_topics: Optional[int] = None
     ) -> Dict:
@@ -939,12 +918,6 @@ class TransformerEnhancedLDA:
             np.mean(semantic_consistencies) if semantic_consistencies else 0
         )
 
-        # Get the hypernym of the topics
-        all_hypernyms = set()
-        for topic_details in self.topics:
-            for word in topic_details["words"]:
-                all_hypernyms.add(self.get_hypernym(word))
-
         evaluation = {
             "topics": self.topics,
             "topic_diversity": diversity,
@@ -952,7 +925,6 @@ class TransformerEnhancedLDA:
             "semantic_consistency": avg_consistency,
             "num_topics": len(self.topics),
             "coverage": len(self.processed_tokens) if self.processed_tokens else 0,
-            "hypernyms": all_hypernyms,
         }
 
         logger.info(f"Evaluation metrics: {evaluation}")
