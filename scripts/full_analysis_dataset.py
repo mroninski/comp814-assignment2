@@ -4,6 +4,7 @@ import polars as pl
 from topic_extractor.data_transformation import PostsTableTransformation
 from topic_extractor.lda_tranformer_extractor import TransformerEnhancedLDA
 from topic_extractor.data_extraction import BlogDataProcessor
+from topic_extractor.topic_simplifying import TopicTaxonomyMapper
 
 
 def main():
@@ -29,6 +30,8 @@ def main():
     # Now we start to extract the topics in different ways
     # Apply the LDA model to the transformed data's content column
     lda_obj = TransformerEnhancedLDA(min_topic_size=5)
+    taxonomy_mapper = TopicTaxonomyMapper()
+
     transformed_df.with_columns(
         pl.col("content")
         .map_elements(
@@ -42,6 +45,12 @@ def main():
             return_dtype=pl.List(pl.Utf8),
         )
         .alias("lda_topic_words"),
+        pl.col("taxonomy_classification")
+        .map_elements(
+            lambda x: json.dumps(taxonomy_mapper.map_words_to_taxonomy(x, top_n=10)),
+            return_dtype=pl.Utf8,
+        )
+        .alias("taxonomy_classification"),
     )
 
 
