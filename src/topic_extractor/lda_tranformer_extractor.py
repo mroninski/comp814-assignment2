@@ -868,12 +868,24 @@ class TransformerEnhancedLDA:
 
         logger.info(f"Extracted {len(refined_topics)} topics successfully")
 
+        # Get all the words from the topics
+        all_words = set()
+        for topic in refined_topics:
+            for word in topic["words"]:
+                # Verify this word is clean, to stop skewing the results
+                invalid_words = [_ for _ in word.split(" ") if len(_) <= 2]
+                if len(invalid_words) > 0:
+                    continue
+
+                all_words.add(word)
+
         # Combine results
         combined_results = {
             "extracted_topics": refined_topics,
             "modeling_results": modeling_results,
             "evaluation": evaluation_results,
             "summary": self.get_topic_summary(),
+            "words": all_words,
         }
 
         return combined_results
@@ -984,7 +996,7 @@ class TransformerEnhancedLDA:
 if __name__ == "__main__":
     # Example blog content (replace with actual blog data)
     sample_blog = """
-      last night i dreamed of Jeff Anthony.. because of that, memories came in my head.. uhm, he's my classmate in elementary and actually, he's my crush.. well, we're not close friends.. it's just that he was my crush and he was crushing me back.. he's not that nice.. you know, he embarrassed me in front of his friends.. he's really bad!!! and i hate him for that! well, on the other side, whenever he sees me having fun with others, he's giving a sign that he's jealous.. yes, i'm flattered about that cuz even if he's doing those embarrasing blah blah, he's still kinda affected.. ;)  another "ghost".. he's Cyrus.. well, he's always like that.. he's always on my mind even if i don't like it anymore.. i admit it that once, i've been addicted to him... but, it's not like that anymore... and i hate it now!!!
+    Jazz and the Charleston  Oooh..went to watch  urlLink The Cat's Meow   starring Kirsten Dunst, Cary Elwes and also Edward Hermann, Rory's grandad in Gilmore Girls, who plays William Randolph Hearst, the 1920s newspaper titan. Quick trivia: Did you know that Citizen Kane was supposedly based on his life (Hearst I mean, not Hermann).  The Cat's Meow is based on the novel written by Elinor Glyn, about what really happened on a yachting trip in 1924. Actually, 15 November 1924, to be exact - hehe my birthdate! ooooooooh...  Movie and the webstie have really nice 1920s-style songs...it's actually playing in the BG as I type. And the Charleston dances they did seemed pretty funky too hehe.  Am plannign to watch Lilo n Stitch later, prob at Highpoint. Some lighthearted 'toon eh to jazz up the week. Man, I've really been watching lotsa movies these couple of days...prob to make up for the months of abstinence hehe.  okies, cheerio. And please remember, flooble's down, so leave a bl00p (comment lah)!    
     """
 
     # Initialize the model
@@ -1006,3 +1018,9 @@ if __name__ == "__main__":
 
     print("\nSummary:")
     print(results.get("summary", "No summary available"))
+
+    from topic_extractor.topic_simplifying import map_topic_words_to_taxonomy
+
+    classification = map_topic_words_to_taxonomy(results.get("words", set()), top_n=10)
+
+    print(classification)
