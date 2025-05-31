@@ -77,8 +77,17 @@ class TopicTaxonomyMapper:
         except Exception as e:
             logger.error(f"Failed to load model {model_name}: {e}")
             logger.info("Falling back to smaller GloVe model...")
-            self.model = api.load("glove-wiki-gigaword-50")
-            self.embedding_dim = self.model.vector_size
+            try:
+                self.model = api.load("glove-wiki-gigaword-50")
+                assert isinstance(self.model, KeyedVectors), (
+                    "Fallback model is not a KeyedVectors, failed to load"
+                )
+                self.embedding_dim = self.model.vector_size
+            except Exception as fallback_error:
+                logger.error(f"Failed to load fallback model: {fallback_error}")
+                raise RuntimeError(
+                    "Could not load any word embedding model"
+                ) from fallback_error
 
         self.taxonomy = self._build_comprehensive_taxonomy()
         self._precompute_embeddings()
@@ -818,7 +827,167 @@ def map_topic_words_to_taxonomy(
     return mapper.map_words_to_taxonomy(words, top_n=top_n)
 
 
-# Test validation function
+def map_lda_results_to_taxonomy(
+    lda_results: Dict[str, Any],
+    top_n: int = 3,
+    weight_threshold: float = 0.4,
+    min_similarity: float = 0.15,
+) -> Dict[str, Any]:
+    """
+    Map LDA analysis results to taxonomy categories using weighted word importance.
+
+    This function processes LDA results by:
+    1. Using high quality topics if available, otherwise falling back to all topics
+    2. Extracting words with weights above the threshold for more focused analysis
+    3. Applying weight-based filtering to emphasize most important topic terms
+    4. Mapping the weighted words to taxonomy categories using word embeddings
+
+    Args:
+        lda_results: Dictionary containing LDA analysis results with topics, words, and weights
+        top_n: Number of top taxonomy matches to return per topic
+        weight_threshold: Minimum weight threshold for including words in analysis
+        min_similarity: Minimum similarity threshold for taxonomy matching
+
+    Returns:
+        Dictionary with topic mappings and analysis metadata
+
+    Example:
+        >>> lda_data = {
+        ...     "lda_results": {
+        ...         "high_quality_topics": [...],
+        ...         "topics": [...]
+        ...     }
+        ... }
+        >>> results = map_lda_results_to_taxonomy(lda_data)
+    """
+    if not lda_results or "lda_results" not in lda_results:
+        logger.error("Invalid LDA results structure - missing 'lda_results' key")
+        return {"error": "Invalid LDA results structure"}
+
+    lda_data = lda_results["lda_results"]
+
+    # Determine which topics to use: high quality topics if available, otherwise all topics
+    topics_to_analyze = []
+    if "high_quality_topics" in lda_data and lda_data["high_quality_topics"]:
+        topics_to_analyze = lda_data["high_quality_topics"]
+        topics_source = "high_quality_topics"
+        logger.info(f"Using {len(topics_to_analyze)} high quality topics for analysis")
+    elif "topics" in lda_data and lda_data["topics"]:
+        topics_to_analyze = lda_data["topics"]
+        topics_source = "all_topics"
+        logger.info(
+            f"No high quality topics found, using all {len(topics_to_analyze)} topics"
+        )
+    else:
+        logger.error("No topics found in LDA results")
+        return {"error": "No topics found in LDA results"}
+
+    # Initialize taxonomy mapper
+    try:
+        mapper = TopicTaxonomyMapper()
+    except Exception as e:
+        logger.error(f"Failed to initialize taxonomy mapper: {e}")
+        return {"error": f"Failed to initialize taxonomy mapper: {e}"}
+
+    # Process each topic with weight-based word selection
+    topic_mappings = []
+
+    for topic in topics_to_analyze:
+        topic_id = topic.get("topic_id", "unknown")
+        topic_label = topic.get("label", "unlabeled")
+        words = topic.get("words", [])
+        weights = topic.get("weights", [])
+
+        if not words or not weights or len(words) != len(weights):
+            logger.warning(f"Topic {topic_id} has mismatched words/weights, skipping")
+            continue
+
+        # Filter words by weight threshold for more focused analysis
+        # This emphasizes the most important terms identified by LDA
+        weighted_words = []
+        for word, weight in zip(words, weights):
+            if weight >= weight_threshold:
+                weighted_words.append(word)
+
+        # If threshold filtering is too restrictive, use top weighted words
+        if not weighted_words and words:
+            # Use top 5 words by weight as fallback
+            word_weight_pairs = list(zip(words, weights))
+            word_weight_pairs.sort(key=lambda x: x[1], reverse=True)
+            weighted_words = [word for word, _ in word_weight_pairs[:5]]
+            logger.info(
+                f"Topic {topic_id}: Using top 5 words as weight threshold was too restrictive"
+            )
+
+        if not weighted_words:
+            logger.warning(f"Topic {topic_id} has no valid words after filtering")
+            continue
+
+        logger.info(
+            f"Topic {topic_id}: Analyzing {len(weighted_words)} weighted words: {weighted_words[:3]}..."
+        )
+
+        # Map weighted words to taxonomy using word embeddings
+        try:
+            taxonomy_mappings = mapper.map_words_to_taxonomy(
+                weighted_words, top_n=top_n, min_similarity=min_similarity
+            )
+
+            topic_mapping = {
+                "topic_id": topic_id,
+                "topic_label": topic_label,
+                "weighted_words": weighted_words,
+                "word_count": len(weighted_words),
+                "original_word_count": len(words),
+                "weight_threshold_used": weight_threshold,
+                "taxonomy_mappings": taxonomy_mappings,
+                "top_taxonomy_match": list(taxonomy_mappings.keys())[0]
+                if taxonomy_mappings
+                else None,
+                "max_similarity_score": list(taxonomy_mappings.values())[0]
+                if taxonomy_mappings
+                else 0.0,
+            }
+
+            topic_mappings.append(topic_mapping)
+
+        except Exception as e:
+            logger.error(f"Failed to map topic {topic_id} to taxonomy: {e}")
+            continue
+
+    # Compile overall results
+    results = {
+        "topics_source": topics_source,
+        "total_topics_analyzed": len(topic_mappings),
+        "topics_available": len(topics_to_analyze),
+        "weight_threshold": weight_threshold,
+        "min_similarity": min_similarity,
+        "topic_mappings": topic_mappings,
+        "analysis_metadata": {
+            "taxonomy_categories_found": len(
+                set(
+                    category
+                    for mapping in topic_mappings
+                    for category in mapping["taxonomy_mappings"].keys()
+                )
+            ),
+            "average_words_per_topic": np.mean([
+                mapping["word_count"] for mapping in topic_mappings
+            ])
+            if topic_mappings
+            else 0,
+            "topics_with_mappings": len([
+                mapping for mapping in topic_mappings if mapping["taxonomy_mappings"]
+            ]),
+        },
+    }
+
+    logger.info(
+        f"Successfully mapped {len(topic_mappings)} topics to taxonomy categories"
+    )
+    return results
+
+
 def test_topic_taxonomy_mapper():
     """
     Test the topic taxonomy mapper with word embeddings using the provided example word set.
@@ -942,6 +1111,346 @@ def test_topic_taxonomy_mapper():
     return results
 
 
+def test_lda_taxonomy_mapping():
+    """
+    Test the LDA results to taxonomy mapping function using the provided results.json example.
+
+    Based on the sample data analysis, expected mappings should be:
+    - Topic 1 (turtle/pleisiosaur): science:biology or nature_environment:wildlife
+    - Topic 4 (respiratory): science:biology or health_wellness:medical_issues
+    - Topic 2 (oxygen/cellular): science:biology or health_wellness:physical_health
+    """
+    print("=" * 70)
+    print("TESTING LDA RESULTS TO TAXONOMY MAPPING")
+    print("=" * 70)
+
+    # Example LDA results structure based on results.json
+    sample_lda_results = {
+        "lda_results": {
+            "topics": [
+                {
+                    "topic_id": 1,
+                    "label": "turtle case_turtle case consider",
+                    "words": [
+                        "pleisiosaur",
+                        "case",
+                        "turtle",
+                        "structure environment definitely",
+                        "pleisiosaur turtle case",
+                        "pleisiosaur turtle",
+                        "consider similar",
+                        "consider similar body",
+                        "turtle case consider",
+                        "turtle case",
+                        "environment definitely",
+                        "environment",
+                        "body",
+                    ],
+                    "weights": [
+                        0.7523157880178158,
+                        0.6017747100673718,
+                        0.5431329995215967,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.45209051152321045,
+                    ],
+                    "topic_quality": 0.6525606289583764,
+                    "semantic_coherence": 0.5733862061570197,
+                },
+                {
+                    "topic_id": 4,
+                    "label": "bronchii secondly_respiratory",
+                    "words": [
+                        "respiratory",
+                        "secondly",
+                        "hibernation",
+                        "exchange",
+                        "gas",
+                        "bronchii secondly",
+                        "bronchii",
+                        "gas exchange",
+                        "pressure",
+                        "non",
+                        "non respiratory",
+                        "occur deep dive",
+                        "occur deep",
+                        "occur",
+                        "dramatically beat",
+                    ],
+                    "weights": [
+                        0.5974675232223277,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.3773044141641814,
+                        0.3569677828173034,
+                        0.3569677828173034,
+                        0.3238047867467502,
+                        0.3238047867467502,
+                        0.3238047867467502,
+                        0.3238047867467502,
+                    ],
+                    "topic_quality": 0.6394206093112491,
+                    "semantic_coherence": 0.5145830450359848,
+                },
+                {
+                    "topic_id": 2,
+                    "label": "need oxygen_oxygen single breath",
+                    "words": [
+                        "cell",
+                        "need",
+                        "lung",
+                        "cell need",
+                        "nutrient",
+                        "breath",
+                        "firstly",
+                        "time firstly",
+                        "oxygen single",
+                        "oxygen single breath",
+                        "grow",
+                        "grow regenerate",
+                        "survive",
+                        "regenerate",
+                        "survive grow",
+                    ],
+                    "weights": [
+                        0.8320920427634361,
+                        0.6623262213788947,
+                        0.6194549389790428,
+                        0.6163936203016152,
+                        0.5152512396916177,
+                        0.4904238664229695,
+                        0.4293333745234126,
+                        0.4293333745234126,
+                        0.4293333745234126,
+                        0.4293333745234126,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                    ],
+                    "topic_quality": 0.6327118719703039,
+                    "semantic_coherence": 0.538645348629848,
+                },
+            ],
+            "high_quality_topics": [
+                {
+                    "topic_id": 1,
+                    "label": "turtle case_turtle case consider",
+                    "words": [
+                        "pleisiosaur",
+                        "case",
+                        "turtle",
+                        "structure environment definitely",
+                        "pleisiosaur turtle case",
+                        "pleisiosaur turtle",
+                        "consider similar",
+                        "consider similar body",
+                        "turtle case consider",
+                        "turtle case",
+                        "environment definitely",
+                        "environment",
+                        "body",
+                    ],
+                    "weights": [
+                        0.7523157880178158,
+                        0.6017747100673718,
+                        0.5431329995215967,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.4579498134100106,
+                        0.45209051152321045,
+                    ],
+                    "topic_quality": 0.6525606289583764,
+                    "semantic_coherence": 0.5733862061570197,
+                },
+                {
+                    "topic_id": 4,
+                    "label": "bronchii secondly_respiratory",
+                    "words": [
+                        "respiratory",
+                        "secondly",
+                        "hibernation",
+                        "exchange",
+                        "gas",
+                        "bronchii secondly",
+                        "bronchii",
+                        "gas exchange",
+                        "pressure",
+                        "non",
+                        "non respiratory",
+                        "occur deep dive",
+                        "occur deep",
+                        "occur",
+                        "dramatically beat",
+                    ],
+                    "weights": [
+                        0.5974675232223277,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.47048900869538346,
+                        0.3773044141641814,
+                        0.3569677828173034,
+                        0.3569677828173034,
+                        0.3238047867467502,
+                        0.3238047867467502,
+                        0.3238047867467502,
+                        0.3238047867467502,
+                    ],
+                    "topic_quality": 0.6394206093112491,
+                    "semantic_coherence": 0.5145830450359848,
+                },
+                {
+                    "topic_id": 2,
+                    "label": "need oxygen_oxygen single breath",
+                    "words": [
+                        "cell",
+                        "need",
+                        "lung",
+                        "cell need",
+                        "nutrient",
+                        "breath",
+                        "firstly",
+                        "time firstly",
+                        "oxygen single",
+                        "oxygen single breath",
+                        "grow",
+                        "grow regenerate",
+                        "survive",
+                        "regenerate",
+                        "survive grow",
+                    ],
+                    "weights": [
+                        0.8320920427634361,
+                        0.6623262213788947,
+                        0.6194549389790428,
+                        0.6163936203016152,
+                        0.5152512396916177,
+                        0.4904238664229695,
+                        0.4293333745234126,
+                        0.4293333745234126,
+                        0.4293333745234126,
+                        0.4293333745234126,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                        0.4170528715309865,
+                    ],
+                    "topic_quality": 0.6327118719703039,
+                    "semantic_coherence": 0.538645348629848,
+                },
+            ],
+            "num_topics": 5,
+            "coherence_scores": {
+                "topic_0": 0.5733862061570197,
+                "topic_1": 0.5145830450359848,
+                "topic_2": 0.538645348629848,
+                "topic_3": 0.5490236225294289,
+                "topic_4": 0.49029280518073104,
+            },
+            "average_topic_quality": 0.6271422309572131,
+        }
+    }
+
+    print("Testing LDA taxonomy mapping with sample data...")
+    print(
+        f"Sample contains {len(sample_lda_results['lda_results']['high_quality_topics'])} high quality topics"
+    )
+
+    # Test the mapping function
+    try:
+        results = map_lda_results_to_taxonomy(
+            sample_lda_results, top_n=3, weight_threshold=0.4, min_similarity=0.1
+        )
+
+        print(f"\n✓ Successfully processed {results['total_topics_analyzed']} topics")
+        print(f"✓ Used {results['topics_source']} as data source")
+        print(
+            f"✓ Found {results['analysis_metadata']['taxonomy_categories_found']} unique taxonomy categories"
+        )
+
+        # Validate expected science/biology mappings
+        expected_categories = ["science", "health_wellness", "nature_environment"]
+        found_categories = set()
+
+        print(f"\nTopic Mapping Results:")
+        print("-" * 50)
+
+        for mapping in results["topic_mappings"]:
+            topic_id = mapping["topic_id"]
+            topic_label = mapping["topic_label"]
+            weighted_words = mapping["weighted_words"][:3]  # Show first 3 words
+            top_match = mapping["top_taxonomy_match"]
+            similarity = mapping["max_similarity_score"]
+
+            print(f"Topic {topic_id}: {topic_label}")
+            print(f"  Weighted words: {weighted_words}")
+            print(f"  Top match: {top_match} ({similarity}%)")
+
+            if top_match:
+                major_category = top_match.split(":")[0]
+                found_categories.add(major_category)
+
+            print(f"  All mappings: {list(mapping['taxonomy_mappings'].keys())}")
+            print()
+
+        # Validate results quality
+        print("Validation Results:")
+        print("-" * 30)
+        print(
+            f"✓ All topics mapped successfully: {results['analysis_metadata']['topics_with_mappings'] == results['total_topics_analyzed']}"
+        )
+        print(
+            f"✓ Expected categories found: {any(cat in found_categories for cat in expected_categories)}"
+        )
+        print(f"✓ Categories found: {sorted(found_categories)}")
+
+        # Specific validation for expected biological/scientific content
+        science_related_found = any(
+            cat in found_categories
+            for cat in ["science", "health_wellness", "nature_environment"]
+        )
+        print(f"✓ Science/biology related categories detected: {science_related_found}")
+
+        return results
+
+    except Exception as e:
+        print(f"✗ Test failed with error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return None
+
+
 if __name__ == "__main__":
-    # Run the test with word embeddings
+    # Run the original test with word embeddings
     test_results = test_topic_taxonomy_mapper()
+
+    print("\n" + "=" * 70)
+    print("Running LDA taxonomy mapping test...")
+
+    # Run the new LDA test
+    lda_results = test_lda_taxonomy_mapping()
