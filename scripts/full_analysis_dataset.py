@@ -5,7 +5,10 @@ import polars as pl
 from topic_extractor.data_transformation import PostsTableTransformation
 from topic_extractor.lda_tranformer_extractor import TransformerEnhancedLDA
 from topic_extractor.data_extraction import BlogDataProcessor
-from topic_extractor.topic_simplifying import TopicTaxonomyMapper
+from topic_extractor.topic_simplifying import (
+    TopicTaxonomyMapper,
+    map_lda_results_to_taxonomy,
+)
 from logging import getLogger
 
 
@@ -42,7 +45,7 @@ def main():
     full_df = posts_df.join(files_df, left_on="file_id", right_on="id", how="left")
 
     # Keep only a random sample
-    keep_rows = 200
+    keep_rows = 10000
     logger.info(f"Keeping only a random sample of {keep_rows} rows")
     full_df = full_df.limit(keep_rows)
 
@@ -71,20 +74,11 @@ def main():
         .alias("lda_topics"),
     )
 
-    lda_parsed_df = lda_extracted_df.with_columns(
+    lda_taxonomy_df = lda_extracted_df.with_columns(
         pl.col("lda_topics")
         .map_elements(
-            lambda x: json.loads(x).get("topic_labels"),
-            return_dtype=pl.Utf8,
-        )
-        .alias("lda_topic_words"),
-    )
-
-    lda_taxonomy_df = lda_parsed_df.with_columns(
-        pl.col("lda_topic_words")
-        .map_elements(
             lambda x: json.dumps(
-                taxonomy_mapper.map_words_to_taxonomy(x, top_n=10), default=str
+                map_lda_results_to_taxonomy(taxonomy_mapper, json.loads(x))
             ),
             return_dtype=pl.Utf8,
         )

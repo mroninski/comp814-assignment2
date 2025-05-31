@@ -1194,7 +1194,7 @@ if __name__ == "__main__":
     topic_model = TransformerEnhancedLDA(min_topic_size=2)
 
     # Extract topics - now returns both topics and evaluation results
-    results = topic_model.extract_topics(sample_blog, num_topics=10)
+    results = topic_model.extract_topics(sample_blog, num_topics=5)
 
     print("=" * 50)
     print("TOPIC EXTRACTION RESULTS")
@@ -1203,10 +1203,5 @@ if __name__ == "__main__":
     print("=" * 50)
     print(json.dumps(results, indent=4, default=str))
 
-    from topic_extractor.topic_simplifying import map_topic_words_to_taxonomy
-
-    classification = map_topic_words_to_taxonomy(
-        results.get("topic_labels", set()), top_n=10
-    )
-
-    print(classification)
+    with open("results.json", "w") as f:
+        json.dump(results, f, indent=4, default=str)
