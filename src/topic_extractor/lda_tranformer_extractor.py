@@ -460,7 +460,7 @@ class TransformerEnhancedLDA:
 
             # Use UMAP for better non-linear dimensionality reduction, with safer parameters for small datasets
             n_components = min(min(3, len(documents) - 1), doc_embeddings.shape[1] - 1)
-            n_components = max(2, n_components)
+            n_components = max(1, n_components)
 
             # For very small datasets, use safer UMAP parameters
             n_neighbors = min(max(2, len(documents) // 2), 5)
@@ -483,7 +483,7 @@ class TransformerEnhancedLDA:
             from sklearn.decomposition import PCA
 
             n_components = min(min(3, len(documents) - 1), doc_embeddings.shape[1] - 1)
-            n_components = max(2, n_components)
+            n_components = max(1, n_components)
 
             pca_model = PCA(n_components=n_components, random_state=42)
             reduced_embeddings = pca_model.fit_transform(doc_embeddings)

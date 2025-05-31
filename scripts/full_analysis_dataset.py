@@ -41,8 +41,8 @@ def main():
     # Join the files_df with the posts_df
     full_df = posts_df.join(files_df, left_on="file_id", right_on="id", how="left")
 
-    # Keep only a random sample of 100 rows
-    keep_rows = 5
+    # Keep only a random sample
+    keep_rows = 200
     logger.info(f"Keeping only a random sample of {keep_rows} rows")
     full_df = full_df.limit(keep_rows)
 
@@ -62,8 +62,6 @@ def main():
     lda_obj = TransformerEnhancedLDA(min_topic_size=5)
     taxonomy_mapper = TopicTaxonomyMapper()
 
-    transformed_df.collect()
-
     lda_extracted_df = english_transformed_df.with_columns(
         pl.col("content")
         .map_elements(
@@ -76,7 +74,7 @@ def main():
     lda_parsed_df = lda_extracted_df.with_columns(
         pl.col("lda_topics")
         .map_elements(
-            lambda x: json.loads(x)["words"],
+            lambda x: json.loads(x).get("words"),
             return_dtype=pl.Utf8,
         )
         .alias("lda_topic_words"),
