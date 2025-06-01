@@ -10,8 +10,9 @@ from topic_extractor.topic_simplifying import (
     map_lda_results_to_taxonomy,
 )
 from logging import getLogger
+import logging
 
-
+logging.basicConfig(level=logging.DEBUG)
 logger = getLogger(__name__)
 
 
@@ -27,7 +28,7 @@ def main():
     # First lets check if the data has already been processed, for faster development
     if posts_df_path.exists() and files_df_path.exists():
         logger.info("Loading processed data from cache")
-        files_df = pl.scan_parquet(files_df_path)
+        files_df = pl.scan_parquet(files_df_path, parallel=True)
         posts_df = pl.scan_parquet(posts_df_path)
     else:
         logger.info("No processed data found, extracting data from xml files")
@@ -67,7 +68,7 @@ def main():
 
     lda_extracted_df = english_transformed_df.with_columns(
         pl.col("content")
-        .map_elements(
+        .map_batches(
             lambda x: json.dumps(lda_obj.extract_topics(x), default=str),
             return_dtype=pl.Utf8,
         )
@@ -76,9 +77,11 @@ def main():
 
     lda_taxonomy_df = lda_extracted_df.with_columns(
         pl.col("lda_topics")
-        .map_elements(
+        .map_batches(
             lambda x: json.dumps(
-                map_lda_results_to_taxonomy(taxonomy_mapper, json.loads(x))
+                map_lda_results_to_taxonomy(
+                    taxonomy_mapper, json.loads(x), top_n=5, weight_threshold=0.4
+                )
             ),
             return_dtype=pl.Utf8,
         )

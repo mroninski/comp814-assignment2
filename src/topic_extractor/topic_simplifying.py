@@ -795,7 +795,7 @@ class TopicTaxonomyMapper:
 
 
 def map_topic_words_to_taxonomy(
-    words: Union[Set[str], List[str]], top_n: int = 5
+    mapper: TopicTaxonomyMapper, words: Union[Set[str], List[str]], top_n: int = 5
 ) -> Dict[str, float]:
     """
     Main entry point function for mapping topic words to taxonomy categories using word embeddings.
@@ -810,6 +810,7 @@ def map_topic_words_to_taxonomy(
     4. More appropriate semantic granularity for taxonomy categorization
 
     Args:
+        mapper: TopicTaxonomyMapper instance
         words: Set or list of words from topic extraction
         top_n: Number of top taxonomy matches to return
 
@@ -822,7 +823,6 @@ def map_topic_words_to_taxonomy(
         >>> print(results)
         {'relationships:romantic_relationships': 85.4, 'relationships:friendship': 78.2, ...}
     """
-    mapper = TopicTaxonomyMapper()
     return mapper.map_words_to_taxonomy(words, top_n=top_n)
 
 
