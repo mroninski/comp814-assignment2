@@ -125,12 +125,13 @@ def main():
         files_df, left_on="file_id", right_on="id", how="left"
     )
 
-    # Keep only a random sample
-    keep_rows = 100
+    # Keep only a random sample if needed
+    keep_rows = 0
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
-    blogs_full_df = blogs_full_df.limit(keep_rows)
+    if keep_rows > 0:
+        blogs_full_df = blogs_full_df.limit(keep_rows)
 
     # Next we need to prepare the data for the topic extraction models
     blogs_transformer = PostsTableTransformation(blogs_full_df)
