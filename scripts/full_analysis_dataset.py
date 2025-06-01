@@ -126,7 +126,7 @@ def main():
     )
 
     # Keep only a random sample
-    keep_rows = 5
+    keep_rows = 100
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
