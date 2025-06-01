@@ -89,23 +89,36 @@ class LDADemographicTopicAnalyzer:
                     },
                 },
             },
+            "simple_age_comparison": {
+                "name": "Simple Age Comparison",
+                "segments": {
+                    "under_20": {
+                        "name": "Under 20",
+                        "filter": lambda df: df.filter(
+                            pl.col("age").cast(pl.Int32) < 20
+                        ),
+                    },
+                    "20_and_over": {
+                        "name": "20 and Over",
+                        "filter": lambda df: df.filter(
+                            pl.col("age").cast(pl.Int32) >= 20
+                        ),
+                    },
+                },
+            },
             "student_comparison": {
                 "name": "Student vs Non-Student Analysis",
                 "segments": {
                     "students": {
                         "name": "Students",
                         "filter": lambda df: df.filter(
-                            pl.col("industry")
-                            .str.to_lowercase()
-                            .str.contains("student")
+                            pl.col("industry").str.to_lowercase() == "student"
                         ),
                     },
                     "non_students": {
-                        "name": "Non-Students",
+                        "name": "Non-Students (All Other Categories)",
                         "filter": lambda df: df.filter(
-                            ~pl.col("industry")
-                            .str.to_lowercase()
-                            .str.contains("student")
+                            pl.col("industry").str.to_lowercase() != "student"
                         ),
                     },
                 },
