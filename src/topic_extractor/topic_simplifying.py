@@ -5,7 +5,7 @@ Semantic similarity-based topic mapping to hierarchical taxonomy using word embe
 import json
 import logging
 import numpy as np
-from typing import Dict, List, Set, Tuple, Union, Any, Optional
+from typing import Dict, List, Set, Tuple, Union, Any, Optional, cast
 from gensim.models import KeyedVectors
 from gensim import downloader as api
 from sklearn.metrics.pairwise import cosine_similarity
@@ -19,26 +19,28 @@ logger = logging.getLogger(__name__)
 class TopicTaxonomyMapper:
     """Maps topic words to hierarchical taxonomy using word embeddings."""
 
-    def __init__(self, model_name: str = "word2vec-google-news-300"):
+    def __init__(self, model_name: str = "glove-twitter-200"):
         """Initialize with pre-trained word embedding model."""
         try:
             logger.info(f"Loading word embedding model: {model_name}")
-            self.model: KeyedVectors = api.load(model_name)
-            self.embedding_dim = self.model.vector_size
+            self.model: KeyedVectors = cast(KeyedVectors, api.load(model_name))
+            self.embedding_dim: int = self.model.vector_size
             logger.info(f"Loaded model with {self.embedding_dim}-dimensional vectors")
         except Exception as e:
             logger.error(f"Failed to load model {model_name}: {e}")
             logger.info("Falling back to smaller GloVe model...")
             try:
-                self.model: KeyedVectors = api.load("glove-wiki-gigaword-50")
-                self.embedding_dim = self.model.vector_size
+                self.model: KeyedVectors = cast(
+                    KeyedVectors, api.load("glove-wiki-gigaword-50")
+                )
+                self.embedding_dim: int = self.model.vector_size
             except Exception as fallback_error:
                 logger.error(f"Failed to load fallback model: {fallback_error}")
                 raise RuntimeError(
                     "Could not load any word embedding model"
                 ) from fallback_error
 
-        self.taxonomy = self._build_taxonomy()
+        self.taxonomy: Dict[str, List[str]] = self._build_taxonomy()
         self._precompute_embeddings()
         logger.info(
             f"Initialized taxonomy mapper with {len(self.taxonomy)} major topics"
@@ -114,16 +116,14 @@ class TopicTaxonomyMapper:
                 "movies",
                 "television",
                 "music",
+                "books",
                 "concerts",
                 "theater",
                 "comedy",
                 "celebrities",
-                "entertainment_news",
-                "pop_culture",
-                "streaming",
                 "festivals",
+                "conventions",
                 "awards_shows",
-                "media_content",
             ],
             "technology": [
                 "computers",
@@ -255,7 +255,6 @@ class TopicTaxonomyMapper:
                 "gardening",
                 "reading",
                 "gaming",
-                "music_making",
                 "outdoor_activities",
                 "creative_hobbies",
                 "recreational_pursuits",
@@ -436,9 +435,34 @@ class TopicTaxonomyMapper:
                 "smoking",
                 "personal_preferences",
                 "lifestyle_trends",
-                "quality_of_life",
                 "life_experiences",
-                "lifestyle_balance",
+            ],
+            "internet_culture": [
+                "blogging",
+                "web_development",
+                "html",
+                "instant_messaging",
+                "aim",
+                "friendster",
+                "livejournal",
+                "myspace",  # launched 2003, dataset is from ~2004
+            ],
+            "pop_culture_2000s": [
+                "reality_tv",
+                "american_idol",
+                "mtv",
+                "napster",
+                "ipod",
+                "dvd",
+            ],
+            "daily_life": [
+                "daily_routine",
+                "mundane_activities",
+                "weather",
+                "commute",
+                "chores",
+                "sleep",
+                "dreams",
             ],
         }
 

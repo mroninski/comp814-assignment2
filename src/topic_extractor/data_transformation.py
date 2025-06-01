@@ -13,7 +13,8 @@ import json
 import logging
 import re
 from collections import Counter
-from typing import List, Optional, Tuple
+from typing import List
+import os
 
 import nltk
 import polars as pl
@@ -31,10 +32,16 @@ try:
     nltk.data.find("punkt")
     nltk.data.find("stopwords")
     nltk.data.find("wordnet")
+except IndexError as ie:
+    logging.warning(f"IndexError: {ie}")
+    pass
 except LookupError:
     nltk.download("punkt")
     nltk.download("stopwords")
     nltk.download("wordnet")
+
+# This is to avoid the tokenizers parallelism error
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class PostsTableTransformation:
@@ -75,7 +82,7 @@ class PostsTableTransformation:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-    def _validate_dataframe(self, df: pl.DataFrame) -> None:
+    def _validate_dataframe(self, df: pl.LazyFrame) -> None:
         """Validate that the DataFrame contains required columns."""
         required_columns = ["content"]
         schema = df.schema

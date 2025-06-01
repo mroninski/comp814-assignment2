@@ -7,20 +7,17 @@ topics across different demographic segments with separate files for each demogr
 
 import json
 import warnings
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import polars as pl
 import seaborn as sns
-from plotly.subplots import make_subplots
 
 PLOTLY_AVAILABLE = True
 warnings.filterwarnings("ignore")
@@ -605,7 +602,15 @@ class LDADemographicTopicAnalyzer:
         """Create topic distribution charts for a demographic group."""
 
         # Set up the plot style
-        plt.style.use("seaborn-v0_8")
+        try:
+            plt.style.use("seaborn-v0_8")
+        except OSError:
+            try:
+                plt.style.use("seaborn")
+            except OSError:
+                # Use default style if seaborn is not available
+                plt.style.use("default")
+
         sns.set_palette("husl")
 
         # Calculate number of segments for subplot layout
@@ -714,10 +719,15 @@ class LDADemographicTopicAnalyzer:
 
         # Save with descriptive filename
         filename = f"lda_demographics_{group_id}_{column_name}_topic_analysis.png"
-        plt.savefig(self.output_dir / filename, dpi=300, bbox_inches="tight")
-        plt.close()
+        filepath = self.output_dir / filename
 
-        print(f"      📊 Saved: {filename}")
+        try:
+            plt.savefig(filepath, dpi=300, bbox_inches="tight")
+            print(f"      📊 Saved: {filename}")
+        except Exception as e:
+            print(f"      ❌ Failed to save {filename}: {str(e)}")
+        finally:
+            plt.close()
 
     def _create_group_taxonomy_charts(
         self,
@@ -759,7 +769,13 @@ class LDADemographicTopicAnalyzer:
     ):
         """Create a chart for taxonomy categories (major or sub)."""
 
-        plt.style.use("seaborn-v0_8")
+        try:
+            plt.style.use("seaborn-v0_8")
+        except OSError:
+            try:
+                plt.style.use("seaborn")
+            except OSError:
+                plt.style.use("default")
 
         n_segments = len(segments_with_data)
 
@@ -877,10 +893,15 @@ class LDADemographicTopicAnalyzer:
 
         # Save with descriptive filename
         filename = f"lda_demographics_{group_id}_{category_type}_analysis.png"
-        plt.savefig(self.output_dir / filename, dpi=300, bbox_inches="tight")
-        plt.close()
+        filepath = self.output_dir / filename
 
-        print(f"      📊 Saved: {filename}")
+        try:
+            plt.savefig(filepath, dpi=300, bbox_inches="tight")
+            print(f"      📊 Saved: {filename}")
+        except Exception as e:
+            print(f"      ❌ Failed to save {filename}: {str(e)}")
+        finally:
+            plt.close()
 
     def _create_group_tables(
         self,
@@ -917,10 +938,12 @@ class LDADemographicTopicAnalyzer:
 
         if group_topic_data:
             filename = f"lda_demographics_{group_id}_topic_analysis.csv"
-            pd.DataFrame(group_topic_data).to_csv(
-                self.output_dir / filename, index=False
-            )
-            print(f"      📊 Saved: {filename}")
+            filepath = self.output_dir / filename
+            try:
+                pd.DataFrame(group_topic_data).to_csv(filepath, index=False)
+                print(f"      📊 Saved: {filename}")
+            except Exception as e:
+                print(f"      ❌ Failed to save {filename}: {str(e)}")
 
         # Create taxonomy tables if applicable
         for col in topic_columns:
@@ -982,15 +1005,21 @@ class LDADemographicTopicAnalyzer:
         # Save tables
         if major_cat_data:
             filename = f"lda_demographics_{group_id}_major_categories.csv"
-            pd.DataFrame(major_cat_data).to_csv(self.output_dir / filename, index=False)
-            print(f"      📊 Saved: {filename}")
+            filepath = self.output_dir / filename
+            try:
+                pd.DataFrame(major_cat_data).to_csv(filepath, index=False)
+                print(f"      📊 Saved: {filename}")
+            except Exception as e:
+                print(f"      ❌ Failed to save {filename}: {str(e)}")
 
         if subcategory_data:
             filename = f"lda_demographics_{group_id}_subcategories.csv"
-            pd.DataFrame(subcategory_data).to_csv(
-                self.output_dir / filename, index=False
-            )
-            print(f"      📊 Saved: {filename}")
+            filepath = self.output_dir / filename
+            try:
+                pd.DataFrame(subcategory_data).to_csv(filepath, index=False)
+                print(f"      📊 Saved: {filename}")
+            except Exception as e:
+                print(f"      ❌ Failed to save {filename}: {str(e)}")
 
     def _create_group_summary(self, segments_with_data: List) -> Dict[str, Any]:
         """Create a summary for a demographic group."""
@@ -1024,7 +1053,7 @@ def test_lda_demographic_analyzer():
         analyzer = LDADemographicTopicAnalyzer()
 
         # Define topic columns to analyze
-        topic_columns = ["lda_topic_words", "lda_taxonomy_classification"]
+        topic_columns = ["lda_topics", "lda_taxonomy_classification"]
 
         # Run analysis
         results = analyzer.analyze_lda_demographics(

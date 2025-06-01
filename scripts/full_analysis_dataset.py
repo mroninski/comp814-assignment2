@@ -47,7 +47,7 @@ def process_taxonomy_batch(
     for lda_json in lda_results:
         lda_data = json.loads(lda_json)
         taxonomy_result = map_lda_results_to_taxonomy(
-            taxonomy_mapper, lda_data, top_n=20, min_similarity=0.25
+            taxonomy_mapper, lda_data, top_n=25, min_similarity=0.50
         )
         results.append(json.dumps(taxonomy_result))
 
@@ -126,7 +126,7 @@ def main():
     )
 
     # Keep only a random sample
-    keep_rows = 1000
+    keep_rows = 5
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
