@@ -19,10 +19,13 @@ from gensim.models.phrases import Phraser, Phrases
 from langdetect import LangDetectException, detect_langs
 from scipy.spatial.distance import cosine
 from sentence_transformers import SentenceTransformer
-from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA, LatentDirichletAllocation
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import silhouette_score
 from sklearn.metrics.pairwise import cosine_similarity
 from spacy.cli.download import download
+from umap import UMAP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -345,8 +348,6 @@ class TransformerEnhancedLDA:
         --------
         Dict : Dictionary containing topics, coherence scores, and model
         """
-        from sklearn.cluster import KMeans
-        from sklearn.metrics import silhouette_score
 
         # Preprocess if not already done
         if not self.processed_tokens:
@@ -453,8 +454,6 @@ class TransformerEnhancedLDA:
             "Applying dimensionality reduction for better semantic clustering..."
         )
         try:
-            from umap import UMAP
-
             # Use UMAP for better non-linear dimensionality reduction, with safer parameters for small datasets
             n_components = min(min(3, len(documents) - 1), doc_embeddings.shape[1] - 1)
             n_components = max(1, n_components)
@@ -477,7 +476,6 @@ class TransformerEnhancedLDA:
 
         except (ImportError, Exception) as e:
             logger.info(f"UMAP not available or failed ({e}), falling back to PCA...")
-            from sklearn.decomposition import PCA
 
             n_components = min(min(3, len(documents) - 1), doc_embeddings.shape[1] - 1)
             n_components = max(1, n_components)
