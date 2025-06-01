@@ -47,11 +47,48 @@ def process_taxonomy_batch(
     for lda_json in lda_results:
         lda_data = json.loads(lda_json)
         taxonomy_result = map_lda_results_to_taxonomy(
-            taxonomy_mapper, lda_data, top_n=5, weight_threshold=0.4
+            taxonomy_mapper, lda_data, top_n=20, weight_threshold=0.4
         )
         results.append(json.dumps(taxonomy_result))
 
     return pl.Series(results)
+
+
+def create_lda_optimized_df(posts_df: pl.LazyFrame) -> pl.LazyFrame:
+    """
+    Create an LDA-optimized dataframe by grouping posts by blog (file_id)
+    """
+    # Create LDA-optimized dataframe by grouping posts by blog (file_id)
+    logger.info("Creating LDA-optimized dataframe by grouping posts per blog")
+    lda_post_df = (
+        posts_df
+        # Sort by file_id and date if available to maintain chronological order
+        .sort(
+            ["file_id", "date"]
+            if "date" in posts_df.collect_schema().names()
+            else ["file_id"]
+        )
+        # Group by file_id to combine all posts from the same blog
+        .group_by("file_id")
+        .agg([
+            # Concatenate all content with double newline separator for clean separation
+            pl.col("content").str.concat(delimiter="\n\n").alias("content"),
+            # Keep useful metadata
+            pl.col("content").len().alias("post_count"),
+            pl.col("content").str.len_chars().sum().alias("total_content_length"),
+            # If date column exists, get date range
+            *(
+                [
+                    pl.col("date").min().alias("earliest_post_date"),
+                    pl.col("date").max().alias("latest_post_date"),
+                ]
+                if "date" in posts_df.collect_schema().names()
+                else []
+            ),
+        ])
+    )
+
+    return lda_post_df
 
 
 def main():
@@ -80,12 +117,17 @@ def main():
         data_processor.save_lazyframe(files_df, str(files_df_path.resolve()))
         data_processor.save_lazyframe(posts_df, str(posts_df_path.resolve()))
 
-    # Join the files_df with the posts_df
-    full_df = posts_df.join(files_df, left_on="file_id", right_on="id", how="left")
+    # Prepare an LDA-optimized dataframe
+    lda_post_df = create_lda_optimized_df(posts_df)
+
+    # Join the files_df with the lda_post_df (grouped posts)
+    full_df = lda_post_df.join(files_df, left_on="file_id", right_on="id", how="left")
 
     # Keep only a random sample
-    keep_rows = 1000
-    logger.info(f"Keeping only a random sample of {keep_rows} rows")
+    keep_rows = 5
+    logger.info(
+        f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
+    )
     full_df = full_df.limit(keep_rows)
 
     # Next we need to prepare the data for the topic extraction models

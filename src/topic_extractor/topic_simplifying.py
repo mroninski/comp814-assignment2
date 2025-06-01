@@ -125,14 +125,9 @@ class TopicTaxonomyMapper:
                 "trust_issues",
             ],
             "religion": [
-                "christianity",
-                "islam",
-                "hinduism",
-                "buddhism",
-                "judaism",
-                "atheism",
                 "all_religions",
                 "agnosticism",
+                "atheism",
                 "spiritual_experiences",
                 "spiritual_growth",
                 "spiritual_practices",
@@ -875,8 +870,8 @@ def map_lda_results_to_taxonomy(
     mapper: TopicTaxonomyMapper,
     lda_results: Dict[str, Any],
     top_n: int = 3,
-    weight_threshold: float = 0.4,
-    min_similarity: float = 0.09,
+    weight_threshold: float = 0.2,
+    min_similarity: float = 0.05,
 ) -> Dict[str, Any]:
     """
     Map LDA analysis results to taxonomy categories using weighted word importance.
