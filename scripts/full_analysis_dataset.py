@@ -135,9 +135,7 @@ def main():
     # Next we need to prepare the data for the topic extraction models
     blogs_transformer = PostsTableTransformation(blogs_full_df)
     blogs_transformer = (
-        blogs_transformer.detect_language()
-        .compute_word_frequencies(n_most_common=5, n_least_common=3)
-        .get_dataframe()
+        blogs_transformer.detect_language().clean_up_content_column().get_dataframe()
     )
 
     # Keep only the english posts for focused analysis

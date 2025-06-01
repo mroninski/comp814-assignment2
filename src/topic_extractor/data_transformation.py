@@ -223,6 +223,22 @@ class PostsTableTransformation:
         self.logger.info("Translation completed")
         return self
 
+    def clean_up_content_column(self) -> "PostsTableTransformation":
+        """
+        Clean up the content column by removing special characters and annoying values
+        """
+        # Remove any non-ascii characters from the content column
+        # Also remove the value `urlLink` from the content column
+        self.df = self.df.with_columns(
+            pl.col("content")
+            .str.replace_all(r"[^a-zA-Z\s]", " ")
+            .str.replace_all("urlLink", "")
+            .str.replace_all(r"\s+", " ")
+            .str.strip_chars()
+        )
+
+        return self
+
     def _preprocess_text(self, text: str) -> List[str]:
         """
         Preprocess text for word frequency analysis.
