@@ -49,6 +49,8 @@ class TopicTaxonomyMapper:
     - More appropriate for the sparse, keyword-based nature of topic modeling output
     """
 
+    model: KeyedVectors
+
     def __init__(self, model_name: str = "word2vec-google-news-300"):
         """
         Initialize the taxonomy mapper with a pre-trained word embedding model.
@@ -869,27 +871,29 @@ def map_topic_words_to_taxonomy(
 def map_lda_results_to_taxonomy(
     mapper: TopicTaxonomyMapper,
     lda_results: Dict[str, Any],
-    top_n: int = 3,
+    top_n: int = 10,
     weight_threshold: float = 0.2,
     min_similarity: float = 0.05,
 ) -> Dict[str, Any]:
     """
-    Map LDA analysis results to taxonomy categories using weighted word importance.
+    Map LDA analysis results to taxonomy categories using improved weighted word importance
+    and topic quality scoring.
 
-    This function processes LDA results by:
-    1. Using high quality topics if available, otherwise falling back to all topics
-    2. Extracting words with weights above the threshold for more focused analysis
-    3. Applying weight-based filtering to emphasize most important topic terms
-    4. Mapping the weighted words to taxonomy categories using word embeddings
+    This enhanced implementation:
+    1. Uses weighted embeddings that combine LDA weights with coherence scores
+    2. Applies topic quality as a confidence multiplier
+    3. Uses percentile-based word selection for better focus
+    4. Returns more comprehensive results above specified threshold
 
     Args:
+        mapper: TopicTaxonomyMapper instance
         lda_results: Dictionary containing LDA analysis results with topics, words, and weights
-        top_n: Number of top taxonomy matches to return per topic
-        weight_threshold: Minimum weight threshold for including words in analysis
-        min_similarity: Minimum similarity threshold for taxonomy matching
+        top_n: Number of top taxonomy matches to consider per topic (increased for better coverage)
+        weight_threshold: Minimum weight threshold for including words (used as percentile)
+        min_similarity: Minimum similarity threshold after quality weighting
 
     Returns:
-        Dictionary with topic mappings and analysis metadata
+        Dictionary mapping "major:subtopic" to percentage similarity scores
 
     Example:
         >>> lda_data = {
@@ -898,7 +902,7 @@ def map_lda_results_to_taxonomy(
         ...         "topics": [...]
         ...     }
         ... }
-        >>> results = map_lda_results_to_taxonomy(lda_data)
+        >>> results = map_lda_results_to_taxonomy(mapper, lda_data)
     """
     if not lda_results or "lda_results" not in lda_results:
         logger.error("Invalid LDA results structure - missing 'lda_results' key")
@@ -922,111 +926,162 @@ def map_lda_results_to_taxonomy(
         logger.error("No topics found in LDA results")
         return {"error": "No topics found in LDA results"}
 
-    # Process each topic with weight-based word selection
-    topic_mappings = []
+    # Process each topic with improved weighting
+    all_results = {}
 
     for topic in topics_to_analyze:
         topic_id = topic.get("topic_id", "unknown")
         topic_label = topic.get("label", "unlabeled")
         words = topic.get("words", [])
         weights = topic.get("weights", [])
+        coherence_scores = topic.get("coherence_scores", [])
+        topic_quality = topic.get("topic_quality", 0.5)
+        semantic_coherence = topic.get("semantic_coherence", 0.5)
 
         if not words or not weights or len(words) != len(weights):
             logger.warning(f"Topic {topic_id} has mismatched words/weights, skipping")
             continue
 
-        # Filter words by weight threshold for more focused analysis
-        # This emphasizes the most important terms identified by LDA
-        weighted_words = []
-        for word, weight in zip(words, weights):
-            if weight >= weight_threshold:
-                weighted_words.append(word)
+        # Use coherence scores if available, otherwise default to moderate values
+        if not coherence_scores or len(coherence_scores) != len(words):
+            coherence_scores = [0.5] * len(words)
+            logger.info(f"Topic {topic_id}: Using default coherence scores")
 
-        # If threshold filtering is too restrictive, use top weighted words
-        if not weighted_words and words:
-            # Use top 5 words by weight as fallback
-            word_weight_pairs = list(zip(words, weights))
-            word_weight_pairs.sort(key=lambda x: x[1], reverse=True)
-            weighted_words = [word for word, _ in word_weight_pairs[:5]]
-            logger.info(
-                f"Topic {topic_id}: Using top 5 words as weight threshold was too restrictive"
-            )
+        # Improved word selection using percentile-based threshold
+        # Convert weight_threshold to percentile (0.2 -> 60th percentile)
+        weight_percentile = max(50, (1 - weight_threshold) * 100)
+        weight_threshold_value = np.percentile(weights, weight_percentile)
 
-        if not weighted_words:
+        # Ensure minimum number of words (at least top 3)
+        min_words = min(3, len(words))
+
+        # Get word-weight-coherence tuples and sort by weight
+        word_data = list(zip(words, weights, coherence_scores))
+        word_data.sort(key=lambda x: x[1], reverse=True)
+
+        # Select words either above threshold or top N
+        selected_data = []
+        for word, weight, coherence in word_data:
+            if weight >= weight_threshold_value or len(selected_data) < min_words:
+                selected_data.append((word, weight, coherence))
+
+        # Limit selection to avoid noise (max 8 words per topic)
+        selected_data = selected_data[:8]
+
+        selected_words = [item[0] for item in selected_data]
+        selected_weights = [item[1] for item in selected_data]
+        selected_coherence = [item[2] for item in selected_data]
+
+        if not selected_words:
             logger.warning(f"Topic {topic_id} has no valid words after filtering")
             continue
 
         logger.info(
-            f"Topic {topic_id}: Analyzing {len(weighted_words)} weighted words: {weighted_words[:3]}..."
+            f"Topic {topic_id}: Analyzing {len(selected_words)} weighted words from {len(words)} total"
         )
 
-        # Map weighted words to taxonomy using word embeddings
-        try:
-            taxonomy_mappings = mapper.map_words_to_taxonomy(
-                weighted_words, top_n=top_n, min_similarity=min_similarity
-            )
+        # Create improved weighted embedding
+        topic_embedding = _create_weighted_topic_embedding(
+            selected_words, selected_weights, selected_coherence, mapper
+        )
 
-            topic_mapping = {
-                "topic_id": topic_id,
-                "topic_label": topic_label,
-                "weighted_words": weighted_words,
-                "word_count": len(weighted_words),
-                "original_word_count": len(words),
-                "weight_threshold_used": weight_threshold,
-                "taxonomy_mappings": taxonomy_mappings,
-                "top_taxonomy_match": list(taxonomy_mappings.keys())[0]
-                if taxonomy_mappings
-                else None,
-                "max_similarity_score": list(taxonomy_mappings.values())[0]
-                if taxonomy_mappings
-                else 0.0,
-            }
-
-            topic_mappings.append(topic_mapping)
-
-        except Exception as e:
-            logger.error(f"Failed to map topic {topic_id} to taxonomy: {e}")
+        if topic_embedding is None:
+            logger.warning(f"Topic {topic_id}: No valid embeddings found")
             continue
 
-    # Compile overall results
-    results = {
-        "topics_source": topics_source,
-        "total_topics_analyzed": len(topic_mappings),
-        "topics_available": len(topics_to_analyze),
-        "weight_threshold": weight_threshold,
-        "min_similarity": min_similarity,
-        "topic_mappings": topic_mappings,
-        "analysis_metadata": {
-            "taxonomy_categories_found": len(
-                set(
-                    category
-                    for mapping in topic_mappings
-                    for category in mapping["taxonomy_mappings"].keys()
-                )
-            ),
-            "average_words_per_topic": np.mean([
-                mapping["word_count"] for mapping in topic_mappings
-            ])
-            if topic_mappings
-            else 0,
-            "topics_with_mappings": len([
-                mapping for mapping in topic_mappings if mapping["taxonomy_mappings"]
-            ]),
-        },
-    }
+        # Compute similarities with subtopics
+        subtopic_similarities = mapper._compute_semantic_similarity(
+            topic_embedding, mapper.subtopic_embeddings
+        )
 
-    logger.debug(json.dumps(results, indent=4))
+        # Apply topic quality weighting to similarities
+        # Use a scaled quality multiplier to maintain reasonable score ranges
+        quality_multiplier = 0.5 + (topic_quality * 0.5)  # Scale to 0.5-1.0 range
+
+        weighted_similarities = {
+            subtopic: similarity * quality_multiplier
+            for subtopic, similarity in subtopic_similarities.items()
+        }
+
+        # Filter by minimum similarity threshold
+        filtered_similarities = {
+            subtopic: score
+            for subtopic, score in weighted_similarities.items()
+            if score >= min_similarity
+        }
+
+        # Convert to major:subtopic format and add to results
+        for subtopic, similarity in filtered_similarities.items():
+            major_topic = mapper.subtopic_to_major[subtopic]
+            key = f"{major_topic}:{subtopic}"
+            percentage = round(similarity * 100, 2)
+
+            # Keep the highest score if duplicate keys exist across topics
+            if key not in all_results or percentage > all_results[key]:
+                all_results[key] = percentage
+
+    # Apply final filtering: keep results >= 20% (more permissive than 25%)
+    # and return top results ordered by score
+    filtered_results = {k: v for k, v in all_results.items() if v >= 20.0}
+
+    # Limit to top N*2 results to prevent overwhelming output while being comprehensive
+    sorted_results = sorted(filtered_results.items(), key=lambda x: x[1], reverse=True)
+    final_results = dict(sorted_results[: top_n * 2])
 
     logger.info(
-        f"Successfully mapped {len(topic_mappings)} topics to taxonomy categories"
+        f"Successfully mapped LDA topics to {len(final_results)} taxonomy categories "
+        f"(from {len(all_results)} total matches)"
     )
 
-    # Prepare the results to be returned
-    # Should be the same structure as the taxonomy_mappings which is a dictionary of major:subtopic to percentage similarity
-    # The key should be the major:subtopic and the value should be the percentage similarity
-    return_values = {}
-    for mapping in topic_mappings:
-        for key, value in mapping["taxonomy_mappings"].items():
-            return_values[key] = value
+    return final_results
 
-    return return_values
+
+def _create_weighted_topic_embedding(
+    words: List[str],
+    weights: List[float],
+    coherence_scores: List[float],
+    mapper: TopicTaxonomyMapper,
+) -> Optional[np.ndarray]:
+    """
+    Create weighted topic embedding that combines LDA weights with coherence scores.
+
+    This approach provides more accurate topic representations by:
+    1. Weighting words by both their LDA importance and semantic coherence
+    2. Using normalized weighted averages instead of simple averages
+    3. Handling vocabulary gaps gracefully
+
+    Args:
+        words: List of topic words
+        weights: LDA weights for each word
+        coherence_scores: Coherence scores for each word
+        mapper: TopicTaxonomyMapper instance
+
+    Returns:
+        Weighted average embedding or None if no valid embeddings found
+    """
+    embeddings = []
+    final_weights = []
+
+    for word, weight, coherence in zip(words, weights, coherence_scores):
+        embedding = mapper._get_phrase_embedding(word)
+        if embedding is not None:
+            # Combine LDA weight with coherence score
+            # Higher weight = more important in topic
+            # Higher coherence = more semantically consistent
+            combined_weight = weight * (
+                coherence + 0.2
+            )  # Add 0.2 to avoid zero multiplication
+            embeddings.append(embedding)
+            final_weights.append(combined_weight)
+
+    if not embeddings:
+        return None
+
+    # Normalize weights to sum to 1
+    final_weights = np.array(final_weights)
+    final_weights = final_weights / np.sum(final_weights)
+
+    # Compute weighted average embedding
+    weighted_embedding = np.average(embeddings, axis=0, weights=final_weights)
+
+    return weighted_embedding
