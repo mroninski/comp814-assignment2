@@ -20,17 +20,21 @@ import polars as pl
 from deep_translator import GoogleTranslator
 from langdetect import LangDetectException, detect
 
-# Download required NLTK data
-try:
-    nltk.download("punkt", quiet=True)
-    nltk.download("stopwords", quiet=True)
-    nltk.download("wordnet", quiet=True)
-except:
-    pass
 
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
+
+
+# Download required NLTK data
+try:
+    nltk.data.find("punkt")
+    nltk.data.find("stopwords")
+    nltk.data.find("wordnet")
+except LookupError:
+    nltk.download("punkt")
+    nltk.download("stopwords")
+    nltk.download("wordnet")
 
 
 class PostsTableTransformation:

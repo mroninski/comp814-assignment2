@@ -27,7 +27,10 @@ from spacy.cli.download import download
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-nltk.download("wordnet")
+try:
+    nltk.data.find("wordnet")
+except LookupError:
+    nltk.download("wordnet")
 
 
 warnings.filterwarnings("ignore")
