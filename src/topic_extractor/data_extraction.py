@@ -228,9 +228,11 @@ if __name__ == "__main__":
     files_df, posts_df = data_processor.create_dataframes()
 
     # Save the dataframes to parquet files
-    data_processor.save_lazyframe(files_df, ".data/tables/files_df.parquet")
-    data_processor.save_lazyframe(posts_df, ".data/tables/posts_df.parquet")
+    data_processor.save_lazyframe(files_df, ".data/tables/files_df")
+    data_processor.save_lazyframe(posts_df, ".data/tables/posts_df")
 
     # Join the two dataframes on the file_id column
     joined_df = posts_df.join(files_df, left_on="file_id", right_on="id", how="left")
-    data_processor.save_lazyframe(joined_df, ".data/tables/joined_df.parquet")
+
+    # Save the dataframe to a parquet file
+    joined_df.sink_parquet(path=".data/tables/joined_df", statistics=True, mkdir=True)
