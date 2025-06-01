@@ -109,6 +109,7 @@ class TopicTaxonomyMapper:
             "relationships": [
                 "romantic_relationships",
                 "dating",
+                "work",
                 "marriage",
                 "breakups",
                 "crushes",
@@ -123,7 +124,11 @@ class TopicTaxonomyMapper:
                 "partnership",
                 "trust_issues",
             ],
-            "personal_views": ["religion", "politics"],
+            "personal_views": [
+                "religion",
+                "politics",
+                "commentary",
+            ],
             "self_improvement": [
                 "goal_setting",
                 "motivation",
@@ -185,12 +190,13 @@ class TopicTaxonomyMapper:
                 "innovation",
             ],
             "work_career": [
-                "career_development",
+                "career",
                 "workplace_issues",
                 "professional_skills",
                 "entrepreneurship",
                 "business",
-                "career_change",
+                "management",
+                "leadership",
                 "workplace_relationships",
             ],
             "education_learning": [
@@ -505,6 +511,9 @@ class TopicTaxonomyMapper:
             "lifestyle": [
                 "daily_routines",
                 "life_choices",
+                "drug_use",
+                "alcohol_use",
+                "smoking",
                 "personal_preferences",
                 "lifestyle_trends",
                 "quality_of_life",
@@ -514,11 +523,6 @@ class TopicTaxonomyMapper:
                 "lifestyle_advice",
             ],
         }
-
-        # Validate taxonomy structure
-        for major_topic, subtopics in taxonomy.items():
-            if len(subtopics) < 10:
-                logger.warning(f"Topic '{major_topic}' has fewer than 10 subtopics")
 
         logger.info(
             f"Built taxonomy with {len(taxonomy)} major topics and "
