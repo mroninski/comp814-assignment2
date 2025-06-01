@@ -47,20 +47,20 @@ def process_taxonomy_batch(
     for lda_json in lda_results:
         lda_data = json.loads(lda_json)
         taxonomy_result = map_lda_results_to_taxonomy(
-            taxonomy_mapper, lda_data, top_n=20, weight_threshold=0.4
+            taxonomy_mapper, lda_data, top_n=20, min_similarity=0.25
         )
         results.append(json.dumps(taxonomy_result))
 
     return pl.Series(results)
 
 
-def create_lda_optimized_df(posts_df: pl.LazyFrame) -> pl.LazyFrame:
+def create_blogs_df(posts_df: pl.LazyFrame) -> pl.LazyFrame:
     """
-    Create an LDA-optimized dataframe by grouping posts by blog (file_id)
+    Create a Blog Posts LazyFrame by grouping posts by blog (file_id)
     """
     # Create LDA-optimized dataframe by grouping posts by blog (file_id)
     logger.info("Creating LDA-optimized dataframe by grouping posts per blog")
-    lda_post_df = (
+    blog_posts_df = (
         posts_df
         # Sort by file_id and date if available to maintain chronological order
         .sort(
@@ -88,7 +88,7 @@ def create_lda_optimized_df(posts_df: pl.LazyFrame) -> pl.LazyFrame:
         ])
     )
 
-    return lda_post_df
+    return blog_posts_df
 
 
 def main():
@@ -118,35 +118,39 @@ def main():
         data_processor.save_lazyframe(posts_df, str(posts_df_path.resolve()))
 
     # Prepare an LDA-optimized dataframe
-    lda_post_df = create_lda_optimized_df(posts_df)
+    blog_posts_df = create_blogs_df(posts_df)
 
     # Join the files_df with the lda_post_df (grouped posts)
-    full_df = lda_post_df.join(files_df, left_on="file_id", right_on="id", how="left")
+    blogs_full_df = blog_posts_df.join(
+        files_df, left_on="file_id", right_on="id", how="left"
+    )
 
     # Keep only a random sample
-    keep_rows = 5
+    keep_rows = 1000
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
-    full_df = full_df.limit(keep_rows)
+    blogs_full_df = blogs_full_df.limit(keep_rows)
 
     # Next we need to prepare the data for the topic extraction models
-    transformer = PostsTableTransformation(full_df)
-    transformed_df = (
-        transformer.detect_language()
+    blogs_transformer = PostsTableTransformation(blogs_full_df)
+    blogs_transformer = (
+        blogs_transformer.detect_language()
         .compute_word_frequencies(n_most_common=5, n_least_common=3)
         .get_dataframe()
     )
 
     # Keep only the english posts for focused analysis
-    english_transformed_df = transformed_df.filter(pl.col("content_language") == "en")
+    blogs_english_transformed_df = blogs_transformer.filter(
+        pl.col("content_language") == "en"
+    )
 
     # Now we start to extract the topics in different ways
     # Apply the LDA model to the transformed data's content column
     lda_obj = TransformerEnhancedLDA(min_topic_size=5)
     taxonomy_mapper = TopicTaxonomyMapper()
 
-    lda_extracted_df = english_transformed_df.with_columns(
+    blogs_lda_extracted_df = blogs_english_transformed_df.with_columns(
         pl.col("content")
         .map_batches(
             lambda x: process_lda_batch(x, lda_obj),
@@ -156,7 +160,7 @@ def main():
     )
 
     # Now we can map the extracted topics to the taxonomy
-    lda_taxonomy_df = lda_extracted_df.with_columns(
+    blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
         pl.col("lda_topics")
         .map_batches(
             lambda x: process_taxonomy_batch(x, taxonomy_mapper),
@@ -167,7 +171,7 @@ def main():
 
     # Finally, we save this data
     # This is temporary until we have finished the aggregation and analysis
-    lda_taxonomy_df.sink_parquet(
+    blogs_lda_taxonomy_df.sink_parquet(
         path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
     )
 
