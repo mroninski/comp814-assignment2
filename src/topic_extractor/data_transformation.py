@@ -9,26 +9,39 @@ The intent is to process all of the transformations to the content in this one f
 
 """
 
-import polars as pl
-from langdetect import detect, LangDetectException
-from deep_translator import GoogleTranslator
-import nltk
-from collections import Counter
-import re
-from typing import List, Tuple, Optional
+import json
 import logging
+import re
+from collections import Counter
+from typing import List
+import os
+
+import nltk
+import polars as pl
+from deep_translator import GoogleTranslator
+from langdetect import LangDetectException, detect
+
+
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
+
 
 # Download required NLTK data
 try:
-    nltk.download("punkt", quiet=True)
-    nltk.download("stopwords", quiet=True)
-    nltk.download("wordnet", quiet=True)
-except:
+    nltk.data.find("punkt")
+    nltk.data.find("stopwords")
+    nltk.data.find("wordnet")
+except IndexError as ie:
+    logging.warning(f"IndexError: {ie}")
     pass
+except LookupError:
+    nltk.download("punkt")
+    nltk.download("stopwords")
+    nltk.download("wordnet")
 
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
+# This is to avoid the tokenizers parallelism error
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class PostsTableTransformation:
@@ -48,7 +61,7 @@ class PostsTableTransformation:
 
     def __init__(self, df: pl.LazyFrame, remove_stopwords: bool = True):
         """
-        Initialize the TextMiningTransformer.
+        Initialize the PostsTableTransformation.
 
         Args:
             df (pl.DataFrame): Input DataFrame with schema containing 'content' column
@@ -69,7 +82,7 @@ class PostsTableTransformation:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-    def _validate_dataframe(self, df: pl.DataFrame) -> None:
+    def _validate_dataframe(self, df: pl.LazyFrame) -> None:
         """Validate that the DataFrame contains required columns."""
         required_columns = ["content"]
         schema = df.schema
@@ -78,7 +91,7 @@ class PostsTableTransformation:
             if col not in schema:
                 raise ValueError(f"DataFrame must contain '{col}' column")
 
-    def detect_language(self) -> "TextMiningTransformer":
+    def detect_language(self) -> "PostsTableTransformation":
         """
         Detect the language of each content entry.
 
@@ -127,7 +140,7 @@ class PostsTableTransformation:
 
         return self
 
-    def translate_to_english(self, batch_size: int = 50) -> "TextMiningTransformer":
+    def translate_to_english(self, batch_size: int = 50) -> "PostsTableTransformation":
         """
         Translate non-English content to English.
 
@@ -210,6 +223,22 @@ class PostsTableTransformation:
         self.logger.info("Translation completed")
         return self
 
+    def clean_up_content_column(self) -> "PostsTableTransformation":
+        """
+        Clean up the content column by removing special characters and annoying values
+        """
+        # Remove any non-ascii characters from the content column
+        # Also remove the value `urlLink` from the content column
+        self.df = self.df.with_columns(
+            pl.col("content")
+            .str.replace_all(r"[^a-zA-Z\s]", " ")
+            .str.replace_all("urlLink", "")
+            .str.replace_all(r"\s+", " ")
+            .str.strip_chars()
+        )
+
+        return self
+
     def _preprocess_text(self, text: str) -> List[str]:
         """
         Preprocess text for word frequency analysis.
@@ -255,7 +284,7 @@ class PostsTableTransformation:
         n_most_common: int = 10,
         n_least_common: int = 10,
         min_word_length: int = 2,
-    ) -> "TextMiningTransformer":
+    ) -> "PostsTableTransformation":
         """
         Compute most and least common words in the content.
 
@@ -325,26 +354,12 @@ class PostsTableTransformation:
                 "least_common": least_common_words,
             }
 
-        # Apply frequency computation
-        freq_results = self.df.select(
-            pl.col(content_column).map_elements(
-                _compute_frequencies,
-                return_dtype=pl.Struct([
-                    pl.Field("most_common", pl.List(pl.Utf8)),
-                    pl.Field("least_common", pl.List(pl.Utf8)),
-                ]),
-            )
-        )
-
         # Add columns to DataFrame
         self.df = self.df.with_columns(
             pl.col(content_column)
             .map_elements(
-                _compute_frequencies,
-                return_dtype=pl.Struct([
-                    pl.Field("most_common", pl.List(pl.Utf8)),
-                    pl.Field("least_common", pl.List(pl.Utf8)),
-                ]),
+                lambda x: json.dumps(_compute_frequencies(x), default=str),
+                return_dtype=pl.Utf8,
             )
             .alias("word_frequencies")
         )
@@ -352,7 +367,7 @@ class PostsTableTransformation:
         self.logger.info("Word frequency computation completed")
         return self
 
-    def get_dataframe(self) -> pl.DataFrame:
+    def get_dataframe(self) -> pl.LazyFrame:
         """
         Get the transformed DataFrame.
 
@@ -360,25 +375,6 @@ class PostsTableTransformation:
             pl.DataFrame: The DataFrame with all applied transformations
         """
         return self.df
-
-    def save_results(self, path: str, format: str = "parquet") -> None:
-        """
-        Save the transformed DataFrame to disk.
-
-        Args:
-            path (str): Output file path
-            format (str): Output format ('parquet', 'csv', 'json')
-        """
-        if format == "parquet":
-            self.df.write_parquet(path)
-        elif format == "csv":
-            self.df.write_csv(path)
-        elif format == "json":
-            self.df.write_json(path)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
-
-        self.logger.info(f"Results saved to {path}")
 
 
 # Example usage
@@ -400,7 +396,7 @@ if __name__ == "__main__":
     )
 
     # Keep only a random sample of 100 rows
-    transformed_df = transformed_df.limit(400)
+    transformed_df = transformed_df.limit(5)
 
     print("Transformed DataFrame:")
     print(transformed_df)
@@ -413,4 +409,5 @@ if __name__ == "__main__":
     print("\n" + "=" * 50 + "\n")
 
     print("Word Frequency Results:")
-    print(transformed_df.select(["file_id", "most_common_words", "least_common_words"]))
+    print(transformed_df.select(["file_id", "word_frequencies"]))
+    print("\n" + "=" * 50 + "\n")
