@@ -573,13 +573,13 @@ def map_lda_results_to_taxonomy(
         if not coherence_scores or len(coherence_scores) != len(words):
             coherence_scores = [0.5] * len(words)
 
-        # Select top words by weight (at least top 3, max 8)
+        # Select top words by weight (at least top 3)
         word_data = list(zip(words, weights, coherence_scores))
         word_data.sort(key=lambda x: x[1], reverse=True)
 
-        # Take top 60th percentile or minimum 3 words, max 8
+        # Take top 60th percentile or minimum 3 words
         threshold = np.percentile(weights, 60) if len(weights) > 3 else min(weights)
-        selected_data = [item for item in word_data if item[1] >= threshold][:8]
+        selected_data = [item for item in word_data if item[1] >= threshold]
 
         if len(selected_data) < 3:
             selected_data = word_data[:3]
