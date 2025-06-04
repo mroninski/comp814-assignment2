@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import polars as pl
+from tqdm import tqdm  # progress bar
 
 from topic_extractor.data_transformation import PostsTableTransformation
 from topic_extractor.lda_tranformer_extractor import TransformerEnhancedLDA
@@ -9,6 +10,10 @@ from topic_extractor.topic_simplifying import (
     TopicTaxonomyMapper,
     map_lda_results_to_taxonomy,
 )
+
+from topic_extractor.tfidf_extractor import TFIDFTopicExtractor
+
+
 from logging import getLogger
 import logging
 
@@ -22,13 +27,20 @@ def process_lda_batch(series: pl.Series, lda_obj: TransformerEnhancedLDA) -> pl.
     Returns a Series of JSON strings with the same length as input.
     """
     # Convert to list for processing
+
+    print("Starting LDA topic extraction batch...")
+
     texts = series.to_list()
 
     # Process each text
     results = []
-    for text in texts:
-        lda_result = lda_obj.extract_topics(text)
-        results.append(json.dumps(lda_result, default=str))
+    for i, text in enumerate(tqdm(texts, desc="Extracting LDA topics")):
+        try:
+            lda_result = lda_obj.extract_topics(text)
+            results.append(json.dumps(lda_result, default=str))
+        except Exception as e:
+            logging.warning(f"Failed LDA on index {i}: {e}")
+            results.append(json.dumps({}))
 
     # Return as Series with same length
     return pl.Series(results)
@@ -126,7 +138,7 @@ def main():
     )
 
     # Keep only a random sample if needed
-    keep_rows = 0
+    keep_rows = 100
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
@@ -173,6 +185,20 @@ def main():
     blogs_lda_taxonomy_df.sink_parquet(
         path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
     )
+    #
+    # tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
+    #
+    # # NOTE: collect first to get a regular dataframe since TFIDF extractor is not lazy
+    # full_texts = blogs_english_transformed_df.select("content").collect()["content"].to_list()
+    # tfidf_topics = tfidf_extractor.extract_topics(full_texts)
+    #
+    # blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
+    #     pl.Series("tfidf_topics", tfidf_topics)
+    # )
+    #
+    # blogs_tfidf_extracted_df.sink_parquet(
+    #     path=".data/tables/tfidf_topics.parquet", statistics=True, mkdir=True
+    # )
 
 
 if __name__ == "__main__":

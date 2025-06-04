@@ -1837,7 +1837,11 @@ def test_academic_lda_analyzer():
     print("Testing Academic LDA Demographic Topic Analyzer...")
 
     # Load the sample data
-    data_path = ".data/tables/lda_taxonomy_df.parquet"
+
+    # local running problems. this fixes it for my local. will change before pulling.
+
+    # data_path = ".data/tables/lda_taxonomy_df.parquet"
+    data_path = "C:/Users/kentn/PycharmProjects/comp814-assignment2/.data/tables/lda_taxonomy_df.parquet"
 
     try:
         df = pl.read_parquet(data_path)
