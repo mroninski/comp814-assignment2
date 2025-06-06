@@ -138,7 +138,7 @@ def main():
     )
 
     # Keep only a random sample if needed
-    keep_rows = 100
+    keep_rows = 10
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
@@ -185,20 +185,20 @@ def main():
     blogs_lda_taxonomy_df.sink_parquet(
         path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
     )
-    #
-    # tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
-    #
-    # # NOTE: collect first to get a regular dataframe since TFIDF extractor is not lazy
-    # full_texts = blogs_english_transformed_df.select("content").collect()["content"].to_list()
-    # tfidf_topics = tfidf_extractor.extract_topics(full_texts)
-    #
-    # blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
-    #     pl.Series("tfidf_topics", tfidf_topics)
-    # )
-    #
-    # blogs_tfidf_extracted_df.sink_parquet(
-    #     path=".data/tables/tfidf_topics.parquet", statistics=True, mkdir=True
-    # )
+
+    tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
+
+    # NOTE: collect first to get a regular dataframe since TFIDF extractor is not lazy
+    full_texts = blogs_english_transformed_df.select("content").collect()["content"].to_list()
+    tfidf_topics = tfidf_extractor.extract_topics(full_texts)
+
+    blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
+        pl.Series("tfidf_topics", tfidf_topics)
+    )
+
+    blogs_tfidf_extracted_df.sink_parquet(
+        path=".data/tables/tfidf_topics.parquet", statistics=True, mkdir=True
+    )
 
 
 if __name__ == "__main__":

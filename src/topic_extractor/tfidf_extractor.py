@@ -10,13 +10,11 @@ import re
 from typing import Dict, List, Optional
 
 
-
 class TFIDFTopicExtractor:
     def __init__(self, max_features=1000, top_n=5):
         self.nlp_model = spacy.load("en_core_web_sm")
         self.vectorizer = TfidfVectorizer(max_features=max_features, stop_words='english')
         self.top_n = top_n
-
 
     def _clean_text(self, text: str) -> str:
         """
@@ -52,6 +50,16 @@ class TFIDFTopicExtractor:
 
         return text
 
+    def __init__(self, min_topic_size: int = 5):
+        """
+        Initialize the topic extraction model.
+
+        Args:
+            min_topic_size: Minimum number of words required to form a meaningful topic
+        """
+        self.min_topic_size = min_topic_size
+        self._initialize_models()
+
     def _preprocess_text(self, content: str) -> List[str]:
         """
         Extract meaningful tokens from content using spaCy processing.
@@ -68,10 +76,10 @@ class TFIDFTopicExtractor:
         for token in doc:
             # Keep meaningful tokens: not stopwords, not punctuation, alphabetic, length > 2
             if (
-                not token.is_stop
-                and not token.is_punct
-                and token.is_alpha
-                and len(token.text) > 2
+                    not token.is_stop
+                    and not token.is_punct
+                    and token.is_alpha
+                    and len(token.text) > 2
             ):
                 # Use lemma for better generalization
                 lemma = token.lemma_ if token.lemma_ != "-PRON-" else token.text
@@ -134,24 +142,90 @@ class TFIDFTopicExtractor:
         else:
             return "_".join(words[:2])
 
-    def extract_topics(self, docs):
-        # Step 1: Clean and preprocess
-        cleaned_docs = [self._clean_text(doc) for doc in docs]
-        enhanced_docs = self._enhance_vocabulary_with_phrases(cleaned_docs)
+    def _create_semantic_documents(self, content: str) -> List[str]:
+        """
+        Create semantic documents using sentence boundaries for better topic coherence.
 
-        # Step 2: TF-IDF vectorization
-        tfidf_matrix = self.vectorizer.fit_transform(enhanced_docs)
+        Args:
+            content: Cleaned blog content
+
+        Returns:
+            List of semantic documents for topic modeling
+        """
+        doc = self.nlp_model(content)
+        sentences = [
+            sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20
+        ]
+
+        # Group sentences into coherent documents (2-3 sentences each)
+        documents = []
+        for i in range(0, len(sentences), 2):
+            doc_text = " ".join(sentences[i: i + 3])
+            if len(doc_text.split()) >= self.min_topic_size:
+                documents.append(doc_text)
+
+        # Fallback to token-based windowing if insufficient documents
+        if len(documents) < 3:
+            tokens = self._preprocess_text(content)
+            window_size, overlap = 30, 10
+
+            for i in range(0, len(tokens), window_size - overlap):
+                window = tokens[i: i + window_size]
+                if len(window) >= self.min_topic_size:
+                    documents.append(" ".join(window))
+
+        return documents
+
+    def extract_topics(self, blog_content: str, num_words: int = 10) -> Dict:
+        clean_content = self._clean_text(blog_content)
+        documents = self._create_semantic_documents(clean_content)
+
+        if not documents:
+            return {
+                "tfidf_results": {"topics": []},
+                "words": set(),
+                "topic_labels": []
+            }
+
+        doc_term_matrix = self.vectorizer.fit_transform(documents)
         feature_names = self.vectorizer.get_feature_names_out()
 
-        # Step 3: Extract top terms
         topics = []
-        for row in tfidf_matrix:
+        all_words = set()
+        topic_labels = []
+
+        for doc_idx, row in enumerate(doc_term_matrix):
             row_array = row.toarray().flatten()
             top_indices = np.argsort(row_array)[::-1][:self.top_n]
-            top_terms = [feature_names[i] for i in top_indices if row_array[i] > 0]
-            topics.append(json.dumps(top_terms))
+            top_words = [feature_names[i] for i in top_indices if row_array[i] > 0]
+            top_weights = [row_array[i] for i in top_indices if row_array[i] > 0]
 
-        return pl.Series(topics)
+            if top_words:
+                topic_label = self._generate_topic_label(top_words)
+                all_words.update(top_words)
+                topic_labels.extend(topic_label.split("_"))
+
+                topics.append({
+                    "topic_id": doc_idx,
+                    "label": topic_label,
+                    "words": top_words[:num_words],
+                    "weights": top_weights[:num_words],
+                    "topic_quality": float(np.mean(top_weights[:num_words]))
+                })
+
+        meaningful_topics = self._filter_meaningful_topics(topics)
+
+        return {
+            "tfidf_results": {
+                "topics": meaningful_topics,
+                "num_topics": len(meaningful_topics),
+                "document_count": len(documents),
+                "average_topic_quality": float(
+                    np.mean([t["topic_quality"] for t in meaningful_topics])) if meaningful_topics else 0.0
+            },
+            "words": all_words,
+            "topic_labels": topic_labels
+        }
 
 
 # Example usage for testing
@@ -169,10 +243,9 @@ if __name__ == "__main__":
     topic_model = TFIDFTopicExtractor(max_features=1000, top_n=5)
 
     # Call extract_topics with a list of documents (even if just one)
-    results = topic_model.extract_topics([sample_blog])
+    results = topic_model.extract_topics(sample_blog)
 
     print("TF-IDF TOPIC EXTRACTION RESULTS")
     print("=" * 50)
     for i, topic_json in enumerate(results):
-        print(f"Doc {i+1} Top Terms: {json.loads(topic_json)}")
-
+        print(f"Doc {i + 1} Top Terms: {json.loads(topic_json)}")
