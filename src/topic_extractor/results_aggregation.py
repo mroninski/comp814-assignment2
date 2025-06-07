@@ -236,6 +236,7 @@ class TopicTaxonomyResultsAggregator:
         df_results = pl.DataFrame(records)
         ranked_df_results = self.creat_and_sort_rank_column(df_results)
         ranked_df_results.write_parquet(filename)
+        ranked_df_results.write_csv(filename.with_suffix(".csv"))
         print(f"Category demographic aggregations saved to {filename}")
 
     def save_category_subcategory_demographics_to_parquet(self, filename: str | Path):
@@ -266,6 +267,7 @@ class TopicTaxonomyResultsAggregator:
         ranked_df_results = self.creat_and_sort_rank_column(df_results)
 
         ranked_df_results.write_parquet(filename)
+        ranked_df_results.write_csv(filename.with_suffix(".csv"))
         print(f"Category+Sub-category demographic aggregations saved to {filename}")
 
     def creat_and_sort_rank_column(self, temp_df: pl.DataFrame) -> pl.DataFrame:

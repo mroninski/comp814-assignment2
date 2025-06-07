@@ -1,16 +1,18 @@
-from pathlib import Path
 import json
+import logging
+from logging import getLogger
+from pathlib import Path
+
 import polars as pl
 
+from topic_extractor.data_extraction import BlogDataProcessor
 from topic_extractor.data_transformation import PostsTableTransformation
 from topic_extractor.lda_tranformer_extractor import TransformerEnhancedLDA
-from topic_extractor.data_extraction import BlogDataProcessor
+from topic_extractor.results_aggregation import TopicTaxonomyResultsAggregator
 from topic_extractor.topic_simplifying import (
     TopicTaxonomyMapper,
     map_lda_results_to_taxonomy,
 )
-from logging import getLogger
-import logging
 
 logging.basicConfig(level=logging.DEBUG)
 logger = getLogger(__name__)
@@ -126,7 +128,7 @@ def main():
     )
 
     # Keep only a random sample if needed
-    keep_rows = 200
+    keep_rows = 20
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
@@ -173,8 +175,20 @@ def main():
 
     # Finally, we save this data
     # This is temporary until we have finished the aggregation and analysis
+    lda_taxonomy_df_path = Path(".data/tables/lda_taxonomy_df.parquet")
     blogs_lda_taxonomy_df.sink_parquet(
-        path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
+        path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
+    )
+
+    # Once saved, we can run the aggregation and analysis
+    lda_aggregator = TopicTaxonomyResultsAggregator(
+        parquet_file_path=str(lda_taxonomy_df_path.resolve())
+    )
+    lda_aggregator.save_category_demographics_to_parquet(
+        filename=".data/tables/lda_category_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/lda_category_subcategory_demographics_aggregated.parquet"
     )
 
 
