@@ -48,9 +48,7 @@ def process_taxonomy_batch(
     results = []
     for lda_json in lda_results:
         lda_data = json.loads(lda_json)
-        taxonomy_result = map_lda_results_to_taxonomy(
-            taxonomy_mapper, lda_data, top_n=25, min_similarity=0.50
-        )
+        taxonomy_result = map_lda_results_to_taxonomy(taxonomy_mapper, lda_data)
         results.append(json.dumps(taxonomy_result))
 
     return pl.Series(results)
