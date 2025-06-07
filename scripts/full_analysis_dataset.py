@@ -126,7 +126,7 @@ def main():
     )
 
     # Keep only a random sample if needed
-    keep_rows = 0
+    keep_rows = 200
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
@@ -136,7 +136,10 @@ def main():
     # Next we need to prepare the data for the topic extraction models
     blogs_transformer = PostsTableTransformation(blogs_full_df)
     blogs_transformer = (
-        blogs_transformer.detect_language().clean_up_content_column().get_dataframe()
+        blogs_transformer.detect_language()
+        .clean_up_content_column()
+        .clean_up_industry_column()
+        .get_dataframe()
     )
 
     # Keep only the english posts for focused analysis

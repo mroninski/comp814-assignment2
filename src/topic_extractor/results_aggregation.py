@@ -11,11 +11,14 @@ class TopicTaxonomyResultsAggregator:
 
     This class processes topic taxonomy results and aggregates them across different
     demographic segments including gender, age groups, industry (students), and overall population.
-    Classifications are weighted by their probability scores to provide more accurate topic
+    Classifications are weighted by their probability scores and normalized by the number of
+    documents in each demographic group to provide fair comparisons and more accurate topic
     distributions. The class supports both category-only and category+sub-category aggregations.
     """
 
-    def __init__(self, parquet_file_path: str):
+    def __init__(
+        self, parquet_file_path: str, column_name: str = "lda_taxonomy_classification"
+    ):
         """
         Initialize the aggregator with data from a parquet file.
 
@@ -23,6 +26,7 @@ class TopicTaxonomyResultsAggregator:
             parquet_file_path (str): Path to the parquet file containing LDA results
         """
         self.df = pl.read_parquet(parquet_file_path)
+        self.column_name = column_name
         self.category_aggregations = {}
         self.category_subcategory_aggregations = {}
         self._prepare_demographics()
@@ -78,20 +82,25 @@ class TopicTaxonomyResultsAggregator:
         self, group_df: pl.DataFrame
     ) -> Dict[str, float]:
         """
-        Aggregate weighted classifications for a demographic group, using category only.
+        Aggregate and normalize weighted classifications for a demographic group, using category only.
+        The normalization ensures that scores are comparable across demographic groups of different sizes
+        by calculating the average topic probability per document.
 
         Args:
             group_df (pl.DataFrame): DataFrame subset for the demographic group
 
         Returns:
-            Dict[str, float]: Aggregated weighted classification scores by category
+            Dict[str, float]: Normalized weighted classification scores by category.
+                             Each score represents the average topic probability per document in the group.
         """
         aggregated_scores = defaultdict(float)
+        num_docs = group_df.height
+
+        if num_docs == 0:
+            return {}
 
         for row in group_df.iter_rows(named=True):
-            classifications = self._parse_lda_classification_json(
-                row["lda_taxonomy_classification"]
-            )
+            classifications = self._parse_lda_classification_json(row[self.column_name])
 
             # Add weighted scores for each classification, using category only
             for classification, probability in classifications.items():
@@ -100,26 +109,37 @@ class TopicTaxonomyResultsAggregator:
                     probability / 100.0
                 )  # Convert percentage to weight
 
-        return dict(aggregated_scores)
+        # Normalize scores by the number of documents in the group
+        normalized_scores = {
+            category: total_score / num_docs
+            for category, total_score in aggregated_scores.items()
+        }
+
+        return normalized_scores
 
     def _aggregate_category_subcategory_classifications_for_group(
         self, group_df: pl.DataFrame
     ) -> Dict[str, float]:
         """
-        Aggregate weighted classifications for a demographic group, using full category:sub-category.
+        Aggregate and normalize weighted classifications for a demographic group, using full category:sub-category.
+        The normalization ensures that scores are comparable across demographic groups of different sizes
+        by calculating the average topic probability per document.
 
         Args:
             group_df (pl.DataFrame): DataFrame subset for the demographic group
 
         Returns:
-            Dict[str, float]: Aggregated weighted classification scores by category+sub-category
+            Dict[str, float]: Normalized weighted classification scores by category+sub-category.
+                             Each score represents the average topic probability per document in the group.
         """
         aggregated_scores = defaultdict(float)
+        num_docs = group_df.height
+
+        if num_docs == 0:
+            return {}
 
         for row in group_df.iter_rows(named=True):
-            classifications = self._parse_lda_classification_json(
-                row["lda_taxonomy_classification"]
-            )
+            classifications = self._parse_lda_classification_json(row[self.column_name])
 
             # Add weighted scores for each classification
             for classification, probability in classifications.items():
@@ -127,7 +147,13 @@ class TopicTaxonomyResultsAggregator:
                     probability / 100.0
                 )  # Convert percentage to weight
 
-        return dict(aggregated_scores)
+        # Normalize scores by the number of documents in the group
+        normalized_scores = {
+            classification: total_score / num_docs
+            for classification, total_score in aggregated_scores.items()
+        }
+
+        return normalized_scores
 
     def _aggregate_by_demographics(self) -> None:
         """
@@ -164,7 +190,7 @@ class TopicTaxonomyResultsAggregator:
         self, classifications: Dict[str, float], top_n: int = 10
     ) -> List[Tuple[str, float]]:
         """
-        Get top N classifications sorted by weighted score.
+        Get top N classifications sorted by normalized weighted score.
 
         Args:
             classifications (Dict[str, float]): Classification scores
@@ -197,19 +223,19 @@ class TopicTaxonomyResultsAggregator:
         # Convert aggregations to a structured format suitable for parquet
         records = []
         for demographic, classifications in self.category_aggregations.items():
-            for position, (classification, weighted_score) in enumerate(
+            for position, (classification, average_weighted_score) in enumerate(
                 classifications.items()
             ):
                 records.append({
                     "demographic": demographic,
-                    "position": position + 1,
                     "classification": classification,
-                    "weighted_score": weighted_score,
+                    "average_weighted_score": average_weighted_score,
                 })
 
         # Create DataFrame and save to parquet
         df_results = pl.DataFrame(records)
-        df_results.write_parquet(filename)
+        ranked_df_results = self.creat_and_sort_rank_column(df_results)
+        ranked_df_results.write_parquet(filename)
         print(f"Category demographic aggregations saved to {filename}")
 
     def save_category_subcategory_demographics_to_parquet(self, filename: str | Path):
@@ -227,35 +253,52 @@ class TopicTaxonomyResultsAggregator:
             demographic,
             classifications,
         ) in self.category_subcategory_aggregations.items():
-            for position, (classification, weighted_score) in enumerate(
-                classifications.items()
-            ):
+            for classification, average_weighted_score in classifications.items():
                 records.append({
                     "demographic": demographic,
-                    "position": position + 1,
                     "classification": classification,
-                    "weighted_score": weighted_score,
+                    "average_weighted_score": average_weighted_score,
                 })
 
         # Create DataFrame and save to parquet
         df_results = pl.DataFrame(records)
-        df_results.write_parquet(filename)
+
+        ranked_df_results = self.creat_and_sort_rank_column(df_results)
+
+        ranked_df_results.write_parquet(filename)
         print(f"Category+Sub-category demographic aggregations saved to {filename}")
+
+    def creat_and_sort_rank_column(self, temp_df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Create and sort a rank column based on the average_weighted_score within each demographic.
+        """
+        # The rank should be based on the average_weighted_score within each demographic
+        df_results = temp_df.with_columns(
+            pl.col("average_weighted_score")
+            .rank(method="ordinal", descending=True)
+            .over("demographic")
+            .alias("rank")
+        )
+
+        # Just to make the output more readable, we sort by demographic
+        df_results = df_results.sort(["demographic", "rank"])
+
+        return df_results
 
     def get_category_demographics_dataframe(self) -> pl.DataFrame:
         """
         Get the category-only demographic aggregations as a polars DataFrame.
 
         Returns:
-            pl.DataFrame: DataFrame with columns [demographic, classification, weighted_score]
+            pl.DataFrame: DataFrame with columns [demographic, classification, average_weighted_score]
         """
         records = []
         for demographic, classifications in self.category_aggregations.items():
-            for classification, weighted_score in classifications.items():
+            for classification, average_weighted_score in classifications.items():
                 records.append({
                     "demographic": demographic,
                     "classification": classification,
-                    "weighted_score": weighted_score,
+                    "average_weighted_score": average_weighted_score,
                 })
 
         return pl.DataFrame(records)
@@ -265,18 +308,18 @@ class TopicTaxonomyResultsAggregator:
         Get the category+sub-category demographic aggregations as a polars DataFrame.
 
         Returns:
-            pl.DataFrame: DataFrame with columns [demographic, classification, weighted_score]
+            pl.DataFrame: DataFrame with columns [demographic, classification, average_weighted_score]
         """
         records = []
         for (
             demographic,
             classifications,
         ) in self.category_subcategory_aggregations.items():
-            for classification, weighted_score in classifications.items():
+            for classification, average_weighted_score in classifications.items():
                 records.append({
                     "demographic": demographic,
                     "classification": classification,
-                    "weighted_score": weighted_score,
+                    "average_weighted_score": average_weighted_score,
                 })
 
         return pl.DataFrame(records)
@@ -323,158 +366,3 @@ class TopicTaxonomyResultsAggregator:
                 summary[demo_name] = ("No topics found", "No topics found")
 
         return summary
-
-    def save_category_report(self, filename: str | Path, top_n: int = 15):
-        """
-        Save a detailed markdown report of the category-only demographic aggregations.
-
-        Args:
-            filename (str | Path): Output filename for the report
-            top_n (int): Number of top classifications to include per demographic
-        """
-        filename = self.validate_filename(filename)
-
-        with open(filename, "w") as f:
-            # Write header
-            f.write("# LDA Taxonomy Category Analysis by Demographics\n\n")
-            f.write("## Abstract\n")
-            f.write(
-                "This report presents the aggregated results of Latent Dirichlet Allocation (LDA) topic modeling applied to blog data, analyzing the most prevalent categories (high-level topics) across different demographic segments. The analysis employs weighted probability scores to ensure accurate representation of category distributions.\n\n"
-            )
-
-            f.write("## Methodology\n")
-            f.write(
-                "The LDA taxonomy classifications were processed by extracting only the category portion from 'category:sub-category' format classifications. These were then aggregated using weighted probability scores where each classification's contribution is proportional to its assigned probability. Demographics were grouped according to the assignment specifications:\n"
-            )
-            f.write("- Gender: Male and Female\n")
-            f.write("- Age: ≤20 years and >20 years\n")
-            f.write("- Industry: Students and Non-Students\n")
-            f.write("- Overall: Everyone\n\n")
-
-            f.write("## Results\n\n")
-
-            # Write demographic distribution
-            f.write("### Demographic Distribution\n\n")
-            f.write("| Demographic | Sample Size |\n")
-            f.write("|-------------|-------------|\n")
-
-            for demo_name, demo_df in [
-                ("Male", self.df.filter(pl.col("gender") == "male")),
-                ("Female", self.df.filter(pl.col("gender") == "female")),
-                ("Age ≤20", self.df.filter(pl.col("age_group") == "<=20")),
-                ("Age >20", self.df.filter(pl.col("age_group") == ">20")),
-                ("Students", self.df.filter(pl.col("is_student") == True)),
-                ("Non-Students", self.df.filter(pl.col("is_student") == False)),
-                ("Everyone", self.df),
-            ]:
-                f.write(f"| {demo_name} | {demo_df.height} |\n")
-
-            f.write("\n### Top LDA Taxonomy Categories by Demographic\n\n")
-
-            # Write detailed results for each demographic
-            for demo_name, classifications in self.category_aggregations.items():
-                f.write(f"#### {demo_name}\n\n")
-                f.write("| Rank | Category | Weighted Score |\n")
-                f.write("|------|----------|----------------|\n")
-
-                top_classifications = self.get_top_classifications(
-                    classifications, top_n
-                )
-                for rank, (classification, score) in enumerate(top_classifications, 1):
-                    f.write(f"| {rank} | {classification} | {score:.2f} |\n")
-
-                # Add most popular categories summary
-                if len(top_classifications) >= 2:
-                    f.write(f"\n**Most Popular Categories for {demo_name}:**\n")
-                    f.write(
-                        f"1. {top_classifications[0][0]} (Score: {top_classifications[0][1]:.2f})\n"
-                    )
-                    f.write(
-                        f"2. {top_classifications[1][0]} (Score: {top_classifications[1][1]:.2f})\n\n"
-                    )
-
-            f.write("## Discussion\n\n")
-            f.write(
-                "The category-level analysis reveals broad topic preferences across demographic segments. By focusing on high-level categories rather than specific sub-categories, this analysis provides insights into general areas of interest that may inform content strategy and audience targeting.\n\n"
-            )
-
-        print(f"Category report saved to {filename}")
-
-    def save_category_subcategory_report(self, filename: str | Path, top_n: int = 15):
-        """
-        Save a detailed markdown report of the category+sub-category demographic aggregations.
-
-        Args:
-            filename (str | Path): Output filename for the report
-            top_n (int): Number of top classifications to include per demographic
-        """
-        filename = self.validate_filename(filename)
-
-        with open(filename, "w") as f:
-            # Write header
-            f.write("# LDA Taxonomy Category+Sub-Category Analysis by Demographics\n\n")
-            f.write("## Abstract\n")
-            f.write(
-                "This report presents the aggregated results of Latent Dirichlet Allocation (LDA) topic modeling applied to blog data, analyzing the most prevalent specific topics (category:sub-category) across different demographic segments. The analysis employs weighted probability scores to ensure accurate representation of topic distributions.\n\n"
-            )
-
-            f.write("## Methodology\n")
-            f.write(
-                "The LDA taxonomy classifications were aggregated using their full 'category:sub-category' format with weighted probability scores where each classification's contribution is proportional to its assigned probability. This approach provides a more granular view of topic preferences compared to category-only analysis. Demographics were grouped according to the assignment specifications:\n"
-            )
-            f.write("- Gender: Male and Female\n")
-            f.write("- Age: ≤20 years and >20 years\n")
-            f.write("- Industry: Students and Non-Students\n")
-            f.write("- Overall: Everyone\n\n")
-
-            f.write("## Results\n\n")
-
-            # Write demographic distribution
-            f.write("### Demographic Distribution\n\n")
-            f.write("| Demographic | Sample Size |\n")
-            f.write("|-------------|-------------|\n")
-
-            for demo_name, demo_df in [
-                ("Male", self.df.filter(pl.col("gender") == "male")),
-                ("Female", self.df.filter(pl.col("gender") == "female")),
-                ("Age ≤20", self.df.filter(pl.col("age_group") == "<=20")),
-                ("Age >20", self.df.filter(pl.col("age_group") == ">20")),
-                ("Students", self.df.filter(pl.col("is_student") == True)),
-                ("Non-Students", self.df.filter(pl.col("is_student") == False)),
-                ("Everyone", self.df),
-            ]:
-                f.write(f"| {demo_name} | {demo_df.height} |\n")
-
-            f.write("\n### Top LDA Taxonomy Topics by Demographic\n\n")
-
-            # Write detailed results for each demographic
-            for (
-                demo_name,
-                classifications,
-            ) in self.category_subcategory_aggregations.items():
-                f.write(f"#### {demo_name}\n\n")
-                f.write("| Rank | Topic | Weighted Score |\n")
-                f.write("|------|-------|----------------|\n")
-
-                top_classifications = self.get_top_classifications(
-                    classifications, top_n
-                )
-                for rank, (classification, score) in enumerate(top_classifications, 1):
-                    f.write(f"| {rank} | {classification} | {score:.2f} |\n")
-
-                # Add most popular topics summary
-                if len(top_classifications) >= 2:
-                    f.write(f"\n**Most Popular Topics for {demo_name}:**\n")
-                    f.write(
-                        f"1. {top_classifications[0][0]} (Score: {top_classifications[0][1]:.2f})\n"
-                    )
-                    f.write(
-                        f"2. {top_classifications[1][0]} (Score: {top_classifications[1][1]:.2f})\n\n"
-                    )
-
-            f.write("## Discussion\n\n")
-            f.write(
-                "The detailed category+sub-category analysis provides granular insights into specific topic preferences across demographic segments. This level of detail enables more targeted content development and audience-specific messaging strategies.\n\n"
-            )
-
-        print(f"Category+Sub-category report saved to {filename}")
