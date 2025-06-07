@@ -276,8 +276,8 @@ class TopicTaxonomyMapper:
 def map_lda_results_to_taxonomy(
     mapper: TopicTaxonomyMapper,
     lda_results: Dict[str, Any],
-    top_n: int = 200,
-    min_similarity: float = 0.30,
+    top_n: int = 25,
+    min_similarity: float = 0.50,
 ) -> Dict[str, float]:
     """
     Map LDA analysis results to taxonomy categories using weighted word embeddings.

@@ -29,8 +29,11 @@ class TopicTaxonomyResultsAggregator:
         self.column_name = column_name
         self.category_aggregations = {}
         self.category_subcategory_aggregations = {}
+        self.biased_category_aggregations: Dict[str, Dict[str, float]] = {}
+        self.biased_category_subcategory_aggregations: Dict[str, Dict[str, float]] = {}
         self._prepare_demographics()
         self._aggregate_by_demographics()
+        self._calculate_popularity_bias_adjustment()
 
     def _prepare_demographics(self):
         """Prepare demographic groupings based on assignment requirements."""
@@ -186,6 +189,55 @@ class TopicTaxonomyResultsAggregator:
         self.category_aggregations = category_results
         self.category_subcategory_aggregations = category_subcategory_results
 
+    def _calculate_popularity_bias_adjustment(self) -> None:
+        """
+        Adjust scores based on overall popularity to highlight demographic-specific topics.
+        A higher score means the topic is more unique to that demographic compared to its overall popularity.
+        This is because the main topics are always the most popular, so there is no difference between the different demographics.
+        This is to highlight the topics that are more unique to each demographic.
+        """
+        # Initialize biased aggregation dictionaries
+        self.biased_category_aggregations = {}
+        self.biased_category_subcategory_aggregations = {}
+
+        # Get baseline popularity from the 'Everyone' group
+        overall_category_popularity = self.category_aggregations.get("Everyone", {})
+        overall_cat_subcat_popularity = self.category_subcategory_aggregations.get(
+            "Everyone", {}
+        )
+
+        # Helper function to calculate biased scores
+        def get_biased_scores(
+            demographic_classifications: Dict[str, float],
+            overall_popularity: Dict[str, float],
+        ) -> Dict[str, float]:
+            biased_scores = {}
+            for classification, score in demographic_classifications.items():
+                overall_score = overall_popularity.get(classification, 0)
+                # The biased score is the ratio of the demographic-specific score to the overall score.
+                # A value > 1 indicates higher-than-average interest for this demographic.
+                # A value < 1 indicates lower-than-average interest.
+                # Add a small epsilon to avoid division by zero.
+                biased_scores[classification] = score / (overall_score + 1e-12)
+            return biased_scores
+
+        # Adjust category aggregations for each demographic group except 'Everyone'
+        for demographic, classifications in self.category_aggregations.items():
+            if demographic != "Everyone":
+                self.biased_category_aggregations[demographic] = get_biased_scores(
+                    classifications, overall_category_popularity
+                )
+
+        # Adjust category+subcategory aggregations
+        for (
+            demographic,
+            classifications,
+        ) in self.category_subcategory_aggregations.items():
+            if demographic != "Everyone":
+                self.biased_category_subcategory_aggregations[demographic] = (
+                    get_biased_scores(classifications, overall_cat_subcat_popularity)
+                )
+
     def get_top_classifications(
         self, classifications: Dict[str, float], top_n: int = 10
     ) -> List[Tuple[str, float]]:
@@ -239,6 +291,37 @@ class TopicTaxonomyResultsAggregator:
         ranked_df_results.write_csv(filename.with_suffix(".csv"))
         print(f"Category demographic aggregations saved to {filename}")
 
+    def save_biased_category_demographics_to_parquet(self, filename: str | Path):
+        """
+        Save the popularity-biased category-only demographic aggregations to a parquet file.
+        The score represents how much more interested a demographic is in a topic compared to the general population.
+
+        Args:
+            filename (str): Output filename for the parquet file
+        """
+        filename = self.validate_filename(filename)
+
+        records = []
+        for demographic, classifications in self.biased_category_aggregations.items():
+            for classification, biased_score in classifications.items():
+                records.append({
+                    "demographic": demographic,
+                    "classification": classification,
+                    "popularity_bias_score": biased_score,
+                })
+
+        if not records:
+            print("No biased category demographic aggregations to save.")
+            return
+
+        df_results = pl.DataFrame(records)
+        ranked_df_results = self.creat_and_sort_rank_column(
+            df_results, score_column="popularity_bias_score"
+        )
+        ranked_df_results.write_parquet(filename)
+        ranked_df_results.write_csv(filename.with_suffix(".csv"))
+        print(f"Biased category demographic aggregations saved to {filename}")
+
     def save_category_subcategory_demographics_to_parquet(self, filename: str | Path):
         """
         Save the category+sub-category demographic aggregations to a parquet file.
@@ -270,13 +353,53 @@ class TopicTaxonomyResultsAggregator:
         ranked_df_results.write_csv(filename.with_suffix(".csv"))
         print(f"Category+Sub-category demographic aggregations saved to {filename}")
 
-    def creat_and_sort_rank_column(self, temp_df: pl.DataFrame) -> pl.DataFrame:
+    def save_biased_category_subcategory_demographics_to_parquet(
+        self, filename: str | Path
+    ):
         """
-        Create and sort a rank column based on the average_weighted_score within each demographic.
+        Save the popularity-biased category+sub-category demographic aggregations to a parquet file.
+        The score represents how much more interested a demographic is in a topic compared to the general population.
+
+        Args:
+            filename (str): Output filename for the parquet file
         """
-        # The rank should be based on the average_weighted_score within each demographic
+        filename = self.validate_filename(filename)
+
+        records = []
+        for (
+            demographic,
+            classifications,
+        ) in self.biased_category_subcategory_aggregations.items():
+            for classification, biased_score in classifications.items():
+                records.append({
+                    "demographic": demographic,
+                    "classification": classification,
+                    "popularity_bias_score": biased_score,
+                })
+
+        if not records:
+            print("No biased category+sub-category demographic aggregations to save.")
+            return
+
+        df_results = pl.DataFrame(records)
+        ranked_df_results = self.creat_and_sort_rank_column(
+            df_results, score_column="popularity_bias_score"
+        )
+        ranked_df_results.write_parquet(filename)
+        ranked_df_results.write_csv(filename.with_suffix(".csv"))
+        print(
+            f"Biased Category+Sub-category demographic aggregations saved to {filename}"
+        )
+
+    def creat_and_sort_rank_column(
+        self, temp_df: pl.DataFrame, score_column: str = "average_weighted_score"
+    ) -> pl.DataFrame:
+        """
+        Create and sort a rank column based on a score column within each demographic.
+        """
+        # The rank should be based on the score within each demographic
         df_results = temp_df.with_columns(
-            pl.col("average_weighted_score")
+            pl.col(score_column)
             .rank(method="ordinal", descending=True)
             .over("demographic")
             .alias("rank")

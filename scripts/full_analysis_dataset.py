@@ -126,7 +126,7 @@ def main():
     )
 
     # Keep only a random sample if needed
-    keep_rows = 20
+    keep_rows = 0
     logger.info(
         f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
     )
@@ -187,6 +187,12 @@ def main():
     )
     lda_aggregator.save_category_subcategory_demographics_to_parquet(
         filename=".data/tables/lda_category_subcategory_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_biased_category_demographics_to_parquet(
+        filename=".data/tables/lda_biased_category_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/lda_biased_category_subcategory_demographics_aggregated.parquet"
     )
 
 
