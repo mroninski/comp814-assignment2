@@ -1,16 +1,18 @@
-from pathlib import Path
 import json
+import logging
+from logging import getLogger
+from pathlib import Path
+
 import polars as pl
 
+from topic_extractor.data_extraction import BlogDataProcessor
 from topic_extractor.data_transformation import PostsTableTransformation
 from topic_extractor.lda_tranformer_extractor import TransformerEnhancedLDA
-from topic_extractor.data_extraction import BlogDataProcessor
+from topic_extractor.results_aggregation import TopicTaxonomyResultsAggregator
 from topic_extractor.topic_simplifying import (
     TopicTaxonomyMapper,
     map_lda_results_to_taxonomy,
 )
-from logging import getLogger
-import logging
 
 logging.basicConfig(level=logging.DEBUG)
 logger = getLogger(__name__)
@@ -46,9 +48,7 @@ def process_taxonomy_batch(
     results = []
     for lda_json in lda_results:
         lda_data = json.loads(lda_json)
-        taxonomy_result = map_lda_results_to_taxonomy(
-            taxonomy_mapper, lda_data, top_n=25, min_similarity=0.50
-        )
+        taxonomy_result = map_lda_results_to_taxonomy(taxonomy_mapper, lda_data)
         results.append(json.dumps(taxonomy_result))
 
     return pl.Series(results)
@@ -136,7 +136,10 @@ def main():
     # Next we need to prepare the data for the topic extraction models
     blogs_transformer = PostsTableTransformation(blogs_full_df)
     blogs_transformer = (
-        blogs_transformer.detect_language().clean_up_content_column().get_dataframe()
+        blogs_transformer.detect_language()
+        .clean_up_content_column()
+        .clean_up_industry_column()
+        .get_dataframe()
     )
 
     # Keep only the english posts for focused analysis
@@ -170,8 +173,26 @@ def main():
 
     # Finally, we save this data
     # This is temporary until we have finished the aggregation and analysis
+    lda_taxonomy_df_path = Path(".data/tables/lda_taxonomy_df.parquet")
     blogs_lda_taxonomy_df.sink_parquet(
-        path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
+        path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
+    )
+
+    # Once saved, we can run the aggregation and analysis
+    lda_aggregator = TopicTaxonomyResultsAggregator(
+        parquet_file_path=str(lda_taxonomy_df_path.resolve())
+    )
+    lda_aggregator.save_category_demographics_to_parquet(
+        filename=".data/tables/lda_category_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/lda_category_subcategory_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_biased_category_demographics_to_parquet(
+        filename=".data/tables/lda_biased_category_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/lda_biased_category_subcategory_demographics_aggregated.parquet"
     )
 
 

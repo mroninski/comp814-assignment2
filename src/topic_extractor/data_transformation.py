@@ -239,6 +239,15 @@ class PostsTableTransformation:
 
         return self
 
+    def clean_up_industry_column(self) -> "PostsTableTransformation":
+        """
+        Clean up the industry column by replacing `indUnknown` with `unknown`
+        """
+        self.df = self.df.with_columns(
+            pl.col("industry").str.replace_all("indUnknown", "unknown")
+        )
+        return self
+
     def _preprocess_text(self, text: str) -> List[str]:
         """
         Preprocess text for word frequency analysis.

@@ -2,10 +2,16 @@
 Semantic similarity-based topic mapping to hierarchical taxonomy using word embeddings.
 """
 
+import csv
 import json
 import logging
+import os
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, cast
+from urllib.request import urlopen
+from urllib.error import URLError, HTTPError
+
 import numpy as np
-from typing import Dict, List, Set, Tuple, Union, Any, Optional, cast
 from gensim.models import KeyedVectors
 from gensim import downloader as api
 from sklearn.metrics.pairwise import cosine_similarity
@@ -16,8 +22,123 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class IABTaxonomyFetcher:
+    """Fetches and caches IAB Content Taxonomy from GitHub."""
+
+    def __init__(self, cache_dir: str = ".cache"):
+        self.cache_dir = cache_dir
+        self.cache_file = os.path.join(cache_dir, "iab_taxonomy.json")
+        self.cache_expiry_days = 7
+        self.iab_tsv_url = "https://raw.githubusercontent.com/InteractiveAdvertisingBureau/Taxonomies/develop/Content%20Taxonomies/Content%20Taxonomy%203.1.tsv"
+
+        os.makedirs(cache_dir, exist_ok=True)
+
+    def _is_cache_valid(self) -> bool:
+        """Check if cached taxonomy is still valid."""
+        if not os.path.exists(self.cache_file):
+            return False
+
+        try:
+            with open(self.cache_file, "r", encoding="utf-8") as f:
+                cache_data = json.load(f)
+
+            cache_timestamp = datetime.fromisoformat(cache_data.get("timestamp", ""))
+            expiry_time = cache_timestamp + timedelta(days=self.cache_expiry_days)
+
+            return datetime.now() < expiry_time
+        except (json.JSONDecodeError, ValueError, KeyError):
+            return False
+
+    def _load_from_cache(self) -> Dict[str, List[str]]:
+        """Load taxonomy from cache."""
+        with open(self.cache_file, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+        return cache_data["taxonomy"]
+
+    def _save_to_cache(self, taxonomy: Dict[str, List[str]]) -> None:
+        """Save taxonomy to cache."""
+        cache_data = {"timestamp": datetime.now().isoformat(), "taxonomy": taxonomy}
+        with open(self.cache_file, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, indent=2)
+
+    def _fetch_tsv_data(self) -> str:
+        """Fetch TSV data from IAB GitHub repository."""
+        try:
+            logger.info(f"Fetching IAB taxonomy from {self.iab_tsv_url}")
+            with urlopen(self.iab_tsv_url, timeout=30) as response:
+                return response.read().decode("utf-8")
+        except (URLError, HTTPError) as e:
+            logger.error(f"Failed to fetch IAB taxonomy: {e}")
+            raise RuntimeError(f"Could not fetch IAB taxonomy: {e}")
+
+    def _parse_tsv_to_taxonomy(self, tsv_content: str) -> Dict[str, List[str]]:
+        """Parse TSV content into taxonomy structure."""
+        taxonomy = {}
+        lines = tsv_content.strip().split("\n")
+
+        if len(lines) < 3:
+            raise ValueError("Invalid TSV format: insufficient lines")
+
+        # Skip header lines (first 2 lines)
+        csv_reader = csv.reader(lines[2:], delimiter="\t")
+
+        for row in csv_reader:
+            if len(row) < 4:
+                continue
+
+            # Extract Tier 1 (category) and Name (subtopic)
+            tier1 = row[3].strip() if len(row) > 3 else ""
+            name = row[2].strip() if len(row) > 2 else ""
+
+            if not tier1 or not name:
+                continue
+
+            # Normalize category name for consistency
+            category = tier1.lower().replace(" ", "_").replace("&", "and")
+
+            # Skip if name is identical to tier1 (these are category headers)
+            if name.lower() == tier1.lower():
+                continue
+
+            # Initialize category if not exists
+            if category not in taxonomy:
+                taxonomy[category] = []
+
+            # Add subtopic, avoiding duplicates
+            subtopic = name.lower().replace(" ", "_").replace("&", "and")
+            if subtopic not in taxonomy[category]:
+                taxonomy[category].append(subtopic)
+
+        # Filter out categories with no subtopics
+        taxonomy = {k: v for k, v in taxonomy.items() if v}
+
+        logger.info(
+            f"Parsed IAB taxonomy with {len(taxonomy)} categories and "
+            f"{sum(len(subtopics) for subtopics in taxonomy.values())} subtopics"
+        )
+
+        return taxonomy
+
+    def get_taxonomy(self) -> Dict[str, List[str]]:
+        """Get IAB taxonomy, using cache if valid or fetching fresh data."""
+        if self._is_cache_valid():
+            logger.info("Loading IAB taxonomy from cache")
+            return self._load_from_cache()
+
+        logger.info("Fetching fresh IAB taxonomy")
+        tsv_content = self._fetch_tsv_data()
+        taxonomy = self._parse_tsv_to_taxonomy(tsv_content)
+        self._save_to_cache(taxonomy)
+
+        return taxonomy
+
+
 class TopicTaxonomyMapper:
-    """Maps topic words to hierarchical taxonomy using word embeddings."""
+    """Maps topic words to hierarchical taxonomy using word embeddings.
+    Details on the model:
+    https://github.com/piskvorky/gensim-data?tab=readme-ov-file
+
+    """
 
     def __init__(self, model_name: str = "glove-twitter-200"):
         """Initialize with pre-trained word embedding model."""
@@ -40,6 +161,7 @@ class TopicTaxonomyMapper:
                     "Could not load any word embedding model"
                 ) from fallback_error
 
+        self.iab_fetcher = IABTaxonomyFetcher()
         self.taxonomy: Dict[str, List[str]] = self._build_taxonomy()
         self._precompute_embeddings()
         logger.info(
@@ -47,430 +169,34 @@ class TopicTaxonomyMapper:
         )
 
     def _build_taxonomy(self) -> Dict[str, List[str]]:
-        """Build comprehensive taxonomy covering major domains of human discourse."""
-        taxonomy = {
-            "relationships": [
-                "romantic_relationships",
-                "dating",
-                "marriage",
-                "breakups",
-                "crushes",
-                "friendship",
-                "family_relationships",
-                "social_connections",
-                "love",
-                "intimacy",
-                "partnership",
-                "trust_issues",
-            ],
-            "religion": [
-                "all_religions",
-                "agnosticism",
-                "atheism",
-                "spiritual_experiences",
-                "spiritual_growth",
-                "spiritual_practices",
-                "spiritual_community",
-            ],
-            "politics": [
-                "political_commentary",
-                "political_news",
-                "political_analysis",
-                "republican",
-                "democrat",
-                "conservative",
-                "liberal",
-                "socialism",
-                "capitalism",
-                "social_justice",
-            ],
-            "self-improvement": [
-                "goal_setting",
-                "motivation",
-                "confidence_building",
-                "life_changes",
-                "personal_growth",
-                "mindfulness",
-                "self_reflection",
-                "habits",
-                "productivity",
-                "time_management",
-                "self_care",
-                "identity",
-            ],
-            "emotions": [
-                "happiness",
-                "sadness",
-                "anger",
-                "anxiety",
-                "depression",
-                "stress",
-                "emotional_wellbeing",
-                "mental_health",
-                "therapy",
-                "mood_changes",
-                "emotional_expression",
-                "coping_strategies",
-            ],
-            "entertainment": [
-                "movies",
-                "television",
-                "music",
-                "books",
-                "concerts",
-                "theater",
-                "comedy",
-                "celebrities",
-                "festivals",
-                "conventions",
-                "awards_shows",
-            ],
-            "technology": [
-                "computers",
-                "smartphones",
-                "internet",
-                "social_media",
-                "apps",
-                "software",
-                "gadgets",
-                "artificial_intelligence",
-                "programming",
-                "digital_trends",
-                "tech_reviews",
-                "cybersecurity",
-                "innovation",
-            ],
-            "work": [
-                "career",
-                "workplace_issues",
-                "professional_skills",
-                "entrepreneurship",
-                "business",
-                "management",
-                "leadership",
-                "workplace_relationships",
-            ],
-            "education": [
-                "school",
-                "university",
-                "studying",
-                "academic_achievement",
-                "learning_skills",
-                "educational_experiences",
-                "teachers",
-                "courses",
-                "research",
-                "knowledge",
-                "skill_development",
-            ],
-            "health": [
-                "physical_health",
-                "exercise",
-                "nutrition",
-                "diet",
-                "medical_issues",
-                "wellness_practices",
-                "fitness",
-                "healthcare",
-                "body_image",
-                "lifestyle",
-                "preventive_care",
-                "health_goals",
-            ],
-            "travel": [
-                "vacation",
-                "destinations",
-                "travel_experiences",
-                "cultural_exploration",
-                "adventure",
-                "tourism",
-                "travel_planning",
-                "international_travel",
-                "local_exploration",
-                "transportation",
-                "accommodations",
-            ],
-            "food": [
-                "recipes",
-                "cooking",
-                "restaurants",
-                "cuisine",
-                "food_culture",
-                "baking",
-                "nutrition",
-                "food_reviews",
-                "dining_experiences",
-                "beverages",
-                "food_preparation",
-                "culinary_skills",
-            ],
-            "sports": [
-                "football",
-                "basketball",
-                "soccer",
-                "tennis",
-                "baseball",
-                "athletics",
-                "sports_events",
-                "team_sports",
-                "individual_sports",
-                "sports_news",
-                "competitive_sports",
-                "training",
-                "running",
-                "cycling",
-                "swimming",
-                "golf",
-            ],
-            "arts_culture": [
-                "visual_arts",
-                "literature",
-                "poetry",
-                "creative_writing",
-                "photography",
-                "painting",
-                "sculpture",
-                "cultural_events",
-                "artistic_expression",
-                "museums",
-                "galleries",
-                "cultural_heritage",
-            ],
-            "family": [
-                "parenting",
-                "children",
-                "family_life",
-                "family_events",
-                "siblings",
-                "extended_family",
-                "family_traditions",
-                "family_relationships",
-                "family_activities",
-                "family_support",
-                "family_dynamics",
-            ],
-            "hobbies_interests": [
-                "collecting",
-                "crafting",
-                "gardening",
-                "reading",
-                "gaming",
-                "outdoor_activities",
-                "creative_hobbies",
-                "recreational_pursuits",
-                "hobby_communities",
-                "leisure_activities",
-            ],
-            "finance_money": [
-                "personal_finance",
-                "budgeting",
-                "savings",
-                "investments",
-                "debt",
-                "financial_planning",
-                "money_management",
-                "economic_issues",
-                "financial_advice",
-                "spending",
-                "financial_goals",
-            ],
-            "home": [
-                "home_improvement",
-                "interior_design",
-                "household_management",
-                "home_maintenance",
-                "living_spaces",
-                "home_decoration",
-                "organization",
-                "domestic_life",
-                "housing",
-                "neighborhood",
-            ],
-            "fashion": [
-                "clothing",
-                "fashion_trends",
-                "personal_style",
-                "beauty",
-                "makeup",
-                "fashion_advice",
-                "style_inspiration",
-                "accessories",
-                "grooming",
-                "appearance",
-            ],
-            "nature": [
-                "environmental_issues",
-                "climate_change",
-                "nature_appreciation",
-                "outdoor_experiences",
-                "wildlife",
-                "conservation",
-                "sustainability",
-                "environmental_activism",
-                "ecological_awareness",
-            ],
-            "news": [
-                "current_events",
-                "political_news",
-                "world_events",
-                "local_news",
-                "breaking_news",
-                "current_affairs",
-                "news_analysis",
-                "social_issues",
-                "public_policy",
-                "global_events",
-                "journalism",
-                "media_coverage",
-            ],
-            "communication": [
-                "social_interactions",
-                "communication_skills",
-                "social_media_use",
-                "online_communities",
-                "networking",
-                "social_trends",
-                "digital_communication",
-                "social_behavior",
-                "community_involvement",
-            ],
-            "transportation": [
-                "driving",
-                "public_transportation",
-                "vehicles",
-                "traffic",
-                "commuting",
-                "transportation_issues",
-                "automotive",
-                "travel_methods",
-                "mobility",
-            ],
-            "science": [
-                "scientific_discoveries",
-                "research",
-                "scientific_method",
-                "biology",
-                "physics",
-                "chemistry",
-                "space",
-                "scientific_innovation",
-                "laboratories",
-                "scientific_studies",
-            ],
-            "history": [
-                "historical_events",
-                "historical_figures",
-                "cultural_history",
-                "historical_analysis",
-                "historical_periods",
-                "heritage",
-                "historical_significance",
-                "historical_research",
-            ],
-            "gaming": [
-                "video_games",
-                "gaming_culture",
-                "game_reviews",
-                "gaming_technology",
-                "competitive_gaming",
-                "game_development",
-                "gaming_communities",
-                "mobile_games",
-                "gaming_industry",
-                "game_design",
-            ],
-            "music": [
-                "musical_genres",
-                "musicians",
-                "concerts",
-                "music_creation",
-                "instruments",
-                "music_appreciation",
-                "music_industry",
-                "songwriting",
-                "music_performance",
-                "music_technology",
-                "music_education",
-            ],
-            "literature": [
-                "books",
-                "authors",
-                "creative_writing",
-                "literary_analysis",
-                "poetry",
-                "storytelling",
-                "writing_process",
-                "literary_genres",
-                "publishing",
-                "reading_experiences",
-                "literary_criticism",
-            ],
-            "photography": [
-                "photography_techniques",
-                "visual_storytelling",
-                "photo_editing",
-                "photography_equipment",
-                "visual_arts",
-                "image_composition",
-                "photography_genres",
-                "visual_media",
-                "graphic_design",
-            ],
-            "social_issues": [
-                "social_justice",
-                "community_involvement",
-                "volunteer_work",
-                "activism",
-                "social_change",
-                "community_development",
-                "civic_engagement",
-                "social_responsibility",
-                "community_events",
-            ],
-            "lifestyle": [
-                "daily_routines",
-                "life_choices",
-                "drug_use",
-                "alcohol_use",
-                "smoking",
-                "personal_preferences",
-                "lifestyle_trends",
-                "life_experiences",
-            ],
-            "internet_culture": [
-                "blogging",
-                "web_development",
-                "html",
-                "instant_messaging",
-                "aim",
-                "friendster",
-                "livejournal",
-                "myspace",  # launched 2003, dataset is from ~2004
-            ],
-            "pop_culture_2000s": [
-                "reality_tv",
-                "american_idol",
-                "mtv",
-                "napster",
-                "ipod",
-                "dvd",
-            ],
-            "daily_life": [
-                "daily_routine",
-                "mundane_activities",
-                "weather",
-                "commute",
-                "chores",
-                "sleep",
-                "dreams",
-            ],
-        }
+        """Build taxonomy from IAB Content Categories."""
+        try:
+            taxonomy = self.iab_fetcher.get_taxonomy()
+            logger.info(
+                f"Built IAB taxonomy with {len(taxonomy)} major topics and "
+                f"{sum(len(subtopics) for subtopics in taxonomy.values())} subtopics"
+            )
+            return taxonomy
+        except Exception as e:
+            logger.error(f"Failed to load IAB taxonomy: {e}")
+            logger.warning("Falling back to basic taxonomy")
 
-        logger.info(
-            f"Built taxonomy with {len(taxonomy)} major topics and "
-            f"{sum(len(subtopics) for subtopics in taxonomy.values())} subtopics"
-        )
-        return taxonomy
+            # Minimal fallback taxonomy in case IAB fetch fails
+            fallback_taxonomy = {
+                "automotive": ["cars", "trucks", "vehicles", "driving"],
+                "business": ["finance", "work", "career", "money"],
+                "entertainment": ["movies", "music", "tv", "games"],
+                "food": ["cooking", "recipes", "restaurants", "dining"],
+                "health": ["fitness", "nutrition", "medical", "wellness"],
+                "sports": ["football", "basketball", "soccer", "athletics"],
+                "technology": ["computers", "internet", "software", "tech"],
+                "travel": ["vacation", "tourism", "destinations", "trips"],
+            }
+
+            logger.info(
+                f"Using fallback taxonomy with {len(fallback_taxonomy)} categories"
+            )
+            return fallback_taxonomy
 
     def _get_word_embedding(self, word: str) -> Optional[np.ndarray]:
         """Get embedding vector for a single word."""
@@ -517,6 +243,8 @@ class TopicTaxonomyMapper:
 
         for major_topic, subtopics in self.taxonomy.items():
             for subtopic in subtopics:
+                # Prepare subtopic for embedding
+                subtopic = subtopic.replace("/", " ").replace("_", " ")
                 embedding = self._get_phrase_embedding(subtopic)
                 if embedding is not None:
                     self.subtopic_embeddings[subtopic] = embedding
@@ -548,8 +276,8 @@ class TopicTaxonomyMapper:
 def map_lda_results_to_taxonomy(
     mapper: TopicTaxonomyMapper,
     lda_results: Dict[str, Any],
-    top_n: int = 10,
-    min_similarity: float = 0.20,
+    top_n: int = 25,
+    min_similarity: float = 0.50,
 ) -> Dict[str, float]:
     """
     Map LDA analysis results to taxonomy categories using weighted word embeddings.
@@ -558,7 +286,6 @@ def map_lda_results_to_taxonomy(
         mapper: TopicTaxonomyMapper instance
         lda_results: Dictionary containing LDA analysis results
         top_n: Number of top taxonomy matches to return
-        min_similarity: Minimum similarity threshold (as decimal, e.g., 0.20 = 20%)
 
     Returns:
         Dictionary mapping "major:subtopic" to percentage similarity scores
@@ -634,18 +361,20 @@ def map_lda_results_to_taxonomy(
         for subtopic, similarity in subtopic_similarities.items():
             weighted_similarity = similarity * quality_multiplier
 
-            if weighted_similarity >= min_similarity:
-                major_topic = mapper.subtopic_to_major[subtopic]
-                key = f"{major_topic}:{subtopic}"
-                percentage = round(weighted_similarity * 100, 2)
+            if weighted_similarity < min_similarity:
+                continue
 
-                # Keep highest score if duplicate keys exist
-                if key not in all_results or percentage > all_results[key]:
-                    all_results[key] = percentage
+            major_topic = mapper.subtopic_to_major[subtopic]
+            key = f"{major_topic}:{subtopic}"
+            percentage = round(weighted_similarity * 100, 2)
+
+            # Keep highest score if duplicate keys exist
+            if key not in all_results or percentage > all_results[key]:
+                all_results[key] = percentage
 
     # Return top results sorted by score
     sorted_results = sorted(all_results.items(), key=lambda x: x[1], reverse=True)
-    final_results = dict(sorted_results[: top_n * 2])
+    final_results = dict(sorted_results[:top_n])
 
     logger.info(f"Mapped topics to {len(final_results)} taxonomy categories")
     return final_results
