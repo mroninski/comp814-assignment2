@@ -1,0 +1,28 @@
+## Methodology
+
+### Data Description and Preprocessing
+
+The experimental dataset consists of 19,320 XML-formatted blog posts collected from an anonymous blogging platform spanning the years 2001 to 2004, representing a critical period in early internet discourse and social media evolution [alves2021evolution]. This dataset presents unique challenges characteristic of early web content, including inconsistent encoding standards, varied HTML artifacts, and the informal linguistic patterns typical of nascent online communication platforms [zabotnova2018internet]. The temporal significance of this dataset cannot be understated, as it captures authentic user-generated content from the formative years of blogging culture, when users exhibited less standardized writing conventions and employed more experimental digital communication styles compared to contemporary social media platforms [?].
+
+The data processing pipeline was architected using Polars, a high-performance DataFrame library specifically chosen for its memory-efficiency and safety and computational speed when handling datasets [nahrstedt2024empirical]. Unlike traditional pandas-based approaches, Polars employs a lazy evaluation strategy and utilizes Apache Arrow's columnar memory format, which provides significant performance advantages when processing the 19,320 files in our corpus. This choice was particularly crucial given the computational intensity of subsequent transformer-based analysis steps, where memory management becomes a limiting factor in scalability. The lazy evaluation paradigm allows for query optimization across the entire processing pipeline, reducing memory footprint compared to equivalent pandas operations on datasets of this magnitude [nahrstedt2024empirical].
+
+The XML parsing implementation required careful consideration of data quality issues common to web content. We implemented a parsing strategy using BeautifulSoup's XML parser. This decision was informed by preliminary manual analysis revealing that files contained unescaped ampersands, malformed entity references, and incomplete tag structures typical of early content management systems [?]. The implementation incorporates a preprocessing step that normalizes common XML violations through regex-based entity correction, specifically targeting unescaped ampersand characters that frequently appear in informal blog writing:
+
+> file_content = re.sub(r"&(?!amp;|lt;|gt;|apos;|quot;)", "&amp;", file_content)
+
+Transforming all of the ampersands to `&amp;` ensures that the XML parser can correctly parse the file, and we can easily remove it afterwards through the data transformation and cleanup.
+
+
+### Demographic Segmentation Strategy
+
+The demographic segmentation approach leverages metadata embedded within filenames, a characteristic of this dataset that provides access to blogger demographic information [schler2006effects]. The filename structure follows a consistent pattern encoding scraping timestamp, gender, age, industry, and astrological sign/horroscope, separated by period delimiters.
+
+The demographic extraction pipeline utilizes Polars' string manipulation to parse the structured filename format efficiently. The implementation employs vectorized string operations that process all 19,320 filenames simultaneously, providing significant performance advantages over iterative parsing approaches. The string splitting operation on period delimiters ensures reliable metadata extraction while maintaining data integrity through explicit column mapping:
+
+> pl.col("filename").str.split(".").list.get(0).alias("scrapping_timestamp")
+> pl.col("filename").str.split(".").list.get(1).alias("gender")  
+> pl.col("filename").str.split(".").list.get(2).alias("age")
+
+The demographic categorization strategy addresses the assignment's specific requirements for analyzing five distinct population segments: males, females, age brackets (≤20 and >20), students, and the complete population. The age threshold of 20 years was selected to capture the transition from adolescent to adult content preferences, particularly relevant in the early 2000s context when this age represented a critical digital native transition point [?].
+
+It was identified that the data contained datetimes that were in other languages, even if the content was in english. To ensure we were processing all English speaking blogs, we utilized the dataparser python library, similarly to [detelich2019large]. The temporal parsing implementation addresses the multilingual date formats present in the original dataset through dateparser's fuzzy matching capabilities. In this identification and analysis, it was also identified that some blogs were not in english, which posed the possibility of impacting testing and development, as well as the final outcome. To fix this issue, in the Data Transformation part of the process, we implemented a method to identify the language of the post.
