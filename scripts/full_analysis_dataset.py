@@ -46,6 +46,26 @@ def process_lda_batch(series: pl.Series, lda_obj: TransformerEnhancedLDA) -> pl.
     return pl.Series(results)
 
 
+def process_tfidf_batch(series: pl.Series, tfidf_obj: TFIDFTopicExtractor) -> pl.Series:
+    """
+    Process a batch of texts through TF-IDF.
+    Returns a Series of JSON strings with the same length as input.
+    """
+    print("Starting TF-IDF topic extraction batch...")
+
+    texts = series.to_list()
+
+    results = []
+    for i, text in enumerate(tqdm(texts, desc="Extracting TF-IDF topics")):
+        try:
+            tfidf_result = tfidf_obj.extract_topics(text)
+            results.append(json.dumps(tfidf_result, default=str))
+        except Exception as e:
+            logging.warning(f"Failed TF-IDF on index {i}: {e}")
+            results.append(json.dumps({}))
+
+    return pl.Series(results)
+
 def process_taxonomy_batch(
     series: pl.Series, taxonomy_mapper: TopicTaxonomyMapper
 ) -> pl.Series:
@@ -186,18 +206,45 @@ def main():
         path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
     )
 
+    # tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
+    #
+    # # NOTE: collect first to get a regular dataframe since TFIDF extractor is not lazy
+    # full_texts = blogs_english_transformed_df.select("content").collect()["content"].to_list()
+    # tfidf_topics = tfidf_extractor.extract_topics(full_texts)
+    #
+    # blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
+    #     # pl.Series("tfidf_topics", tfidf_topics)
+    # )
+    #
+    # blogs_tfidf_extracted_df.sink_parquet(
+    #     path=".data/tables/tfidf_topics.parquet", statistics=True, mkdir=True
+    # )
+
+    # === TF-IDF Path ===
     tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
 
-    # NOTE: collect first to get a regular dataframe since TFIDF extractor is not lazy
-    full_texts = blogs_english_transformed_df.select("content").collect()["content"].to_list()
-    tfidf_topics = tfidf_extractor.extract_topics(full_texts)
-
     blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
-        pl.Series("tfidf_topics", tfidf_topics)
+        pl.col("content")
+        .map_batches(
+            lambda x: process_tfidf_batch(x, tfidf_extractor),
+            return_dtype=pl.Utf8,
+        )
+        .alias("tfidf_topics"),
     )
 
-    blogs_tfidf_extracted_df.sink_parquet(
-        path=".data/tables/tfidf_topics.parquet", statistics=True, mkdir=True
+    # You can also map it to taxonomy here if needed:
+    blogs_tfidf_taxonomy_df = blogs_tfidf_extracted_df.with_columns(
+        pl.col("tfidf_topics")
+        .map_batches(
+            lambda x: process_taxonomy_batch(x, taxonomy_mapper),
+            return_dtype=pl.Utf8,
+        )
+        .alias("tfidf_taxonomy_classification"),
+    )
+
+    # Save the final TF-IDF + taxonomy dataframe
+    blogs_tfidf_taxonomy_df.sink_parquet(
+        path=".data/tables/tfidf_taxonomy_df.parquet", statistics=True, mkdir=True
     )
 
 
