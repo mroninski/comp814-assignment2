@@ -1,0 +1,145 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+
+% Bibliography setup with APA Version 7 style
+\usepackage[style=apa,backend=biber,sorting=nyt]{biblatex}
+\addbibresource{references.bib}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{Comparative Analysis of Topic Extraction Methods for Early 2000s Blog Content Mining}
+
+\author{
+\IEEEauthorblockN{1\textsuperscript{st} Kent Nolan - SID: ?????}
+\IEEEauthorblockA{\textit{Auckland University of Technology}\\
+Auckland, New Zealand \\
+email address}
+\and
+\IEEEauthorblockN{2\textsuperscript{nd} Pedro Mroninski - SID: XTQ6111}
+\IEEEauthorblockA{\textit{Auckland University of Technology}\\
+Auckland, New Zealand \\
+xtq6111@autuni.ac.nz}
+}
+
+\maketitle
+
+\begin{abstract}
+This paper provides a brief overview of a blog mining task, focusing on the comparative analysis of two topic extraction strategies: TF-IDF and Transformer-Enhanced Latent Dirichlet Allocation (LDA). We present key findings on the top topics identified from a dataset of early 2000s blog content. Furthermore, we discuss the performance and scalability of the implemented methods, noting the challenges that would arise when applying them to larger datasets.
+\end{abstract}
+
+\begin{IEEEkeywords}
+topic modeling, blog mining, nlp, lda, tf-idf, demographic analysis, text mining
+\end{IEEEkeywords}
+
+\section{Contributions}
+This section details individual contributions from each team member.
+\begin{itemize}
+    \item Data preprocessing and cleaning pipeline development (Pedro)
+    \item Implementation of topic extraction methods (Pedro + Kent)
+    \item Demographic segmentation and analysis (Pedro + Kent)
+    \item Results evaluation and documentation (Kent)
+\end{itemize}
+
+\section{Introduction}
+\subsection{Background and Motivation}
+This paper explores the importance of understanding demographic-specific content trends from blog data from 2001-2004 \cite{schler2006effects}.
+The value for product/service innovation based on blog analysis is discussed.
+
+\subsection{Research Objectives}
+The primary goal is to extract the two most popular topics per demographic group. Secondary goals include comparing the effectiveness of different topic extraction methods and understanding the nuanced differences in topics across demographics. This is framed within the context of an innovation company seeking to identify marketing opportunities.
+
+\subsection{Paper Organization}
+This paper is organized as follows. The next section reviews relevant literature. Then, we present our methodology, followed by the experimental setup. After that, we present and analyze the results. Finally, we discuss our findings and conclude with future work.
+
+\section{Literature Review}
+\subsection{Topic Modeling Approaches}
+A review of traditional methods like LSA, pLSA, and basic LDA, as well as modern enhancements using transformer-based models and semantic embeddings. This includes previous work on demographic-based content analysis.
+
+\subsection{TF-IDF for Topic Extraction}
+Discussion of the theoretical foundation of TF-IDF, its strengths in identifying distinctive terms, and its limitations in capturing semantic relationships.
+
+\subsection{LDA and Neural Enhancements}
+Exploring the evolution from basic LDA to transformer-enhanced approaches, and the benefits of combining probabilistic models with embeddings, especially for recent applications in short-text analysis.
+
+\section{Methodology}
+\subsection{Data Description and Preprocessing}
+The dataset consists of 19,320 blog posts in XML files, with demographic metadata in the filenames. A table with demographic distribution is provided. The cleaning pipeline involved HTML removal, tokenization, lemmatization, and handling of non-ASCII characters and other noise.
+
+\subsection{Demographic Segmentation Strategy}
+Five demographic groups were created based on metadata extracted from filenames. Data validation and consistency checks were performed to ensure data quality.
+
+\subsection{Topic Extraction Method 1: TF-IDF Approach}
+This method involved document segmentation using semantic boundaries, phrase detection with Gensim, and TF-IDF vectorization with parameters such as \texttt{max\_features=1000} and \texttt{ngram\_range=(1,3)}. Topic quality scoring and filtering were then applied.
+
+\subsection{Topic Extraction Method 2: Transformer-Enhanced LDA}
+This approach used spaCy for semantic document creation and integrated Sentence-BERT embeddings (\texttt{all-mpnet-base-v2}). Adaptive topic number optimization via silhouette analysis was performed, followed by semantic re-ranking of topic words using centroid similarity.
+
+\subsection{Topic Identification and Labeling}
+A common post-processing pipeline for both methods was used to generate topic labels from top words and extract clauses containing dominant topics. Quality-based filtering with a determined threshold was applied.
+
+\section{Experimental Setup}
+\subsection{Implementation Environment}
+The experiments were conducted on Google Colab, with drive mounting for data access. Required libraries include spaCy, Gensim, scikit-learn, and sentence-transformers. Computational considerations for processing 19,320 files are noted.
+
+\subsection{Evaluation Metrics}
+Topic coherence measures were used for quantitative evaluation. Manual evaluation criteria were also established, with inter-annotator agreement assessed for topic relevance.
+
+\subsection{Parameter Optimization}
+Hyperparameter tuning was performed for both methods. A cross-validation strategy was applied to demographic subsets to ensure robustness.
+
+\section{Results and Analysis}
+\subsection{Overall Topic Distribution}
+Presentation of the top topics identified across the entire dataset, including topic frequency and quality scores. Word clouds or other visualizations are used to illustrate major themes.
+
+\subsection{Demographic-Specific Results}
+\subsubsection{Gender-Based Analysis}
+Analysis of topic differences between male and female bloggers, with statistical significance testing to validate the findings.
+
+\subsubsection{Age-Based Analysis}
+Comparison of topics for bloggers under 20 versus over 20, highlighting generational topic preferences.
+
+\subsubsection{Student Population}
+Identification of unique topics for the student demographic and comparison with the general population.
+
+\subsection{Method Comparison}
+A comparative analysis of TF-IDF and Transformer-Enhanced LDA performance in terms of topic quality and coherence scores. Computational efficiency is also analyzed. The agreement between methods on top topics is discussed, noting that the top topics were often the same, requiring a focus on demographic relevance.
+
+\subsection{Example Topic Clauses}
+Presentation of representative clauses for each demographic's top two topics, providing context and interpretation.
+
+\section{Discussion}
+\subsection{Key Findings}
+Discussion of the most significant demographic differences, any unexpected topic discoveries, and the business implications for innovation.
+
+\subsection{Method Strengths and Limitations}
+Analysis of when TF-IDF excels versus Transformer-Enhanced LDA, and the trade-offs between interpretability and semantic depth. Scalability considerations are also discussed, noting the computational intensity of the transformer-based model.
+
+\subsection{Challenges Encountered}
+Discussion of data quality issues (e.g., HTML artifacts, encoding), and the cleanup required. Computational considerations due to model sizes and challenges related to the temporal nature of the content (2001-2004 slang and language use) and handling short, sparse text are also covered.
+
+\section{Conclusion and Future Work}
+\subsection{Summary of Contributions}
+A summary of how the study successfully extracted demographic-specific topics, provided a comprehensive comparison of two extraction methods, and offered practical insights for product innovation.
+
+\subsection{Recommendations}
+Recommendations on the preferred method based on the specific use case and implementation guidelines for a production environment.
+
+\subsection{Future Improvements}
+Suggestions for future work, such as real-time topic tracking, integration with modern blog platforms, exploring deep learning approaches like BERT fine-tuning, and temporal analysis of topic evolution.
+
+\section*{References}
+% Print bibliography using APA style
+\printbibliography
+
+\appendix
+\section{Code Repository}
+The full implementation is available in a Google Colab notebook. Instructions for data placement in Google Drive and a setup guide with requirements are provided in the repository.
+
+\end{document}

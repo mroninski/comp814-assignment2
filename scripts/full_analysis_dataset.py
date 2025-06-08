@@ -1,23 +1,36 @@
-from pathlib import Path
 import json
-import polars as pl
-from tqdm import tqdm  # progress bar
+import logging
+from logging import getLogger
+from pathlib import Path
+import time
+import gc
+import psutil
+from datetime import datetime
+import argparse
+import sys
+import shutil
 
+import polars as pl
+
+from topic_extractor.data_extraction import BlogDataProcessor
 from topic_extractor.data_transformation import PostsTableTransformation
 from topic_extractor.lda_tranformer_extractor import TransformerEnhancedLDA
-from topic_extractor.data_extraction import BlogDataProcessor
+from topic_extractor.results_aggregation import TopicTaxonomyResultsAggregator
 from topic_extractor.topic_simplifying import (
     TopicTaxonomyMapper,
     map_lda_results_to_taxonomy,
 )
 
-from topic_extractor.tfidf_extractor import TFIDFTopicExtractor
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
 
-
-from logging import getLogger
-import logging
-
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
 logger = getLogger(__name__)
 
 
@@ -27,44 +40,178 @@ def process_lda_batch(series: pl.Series, lda_obj: TransformerEnhancedLDA) -> pl.
     Returns a Series of JSON strings with the same length as input.
     """
     # Convert to list for processing
-
-    print("Starting LDA topic extraction batch...")
-
     texts = series.to_list()
 
     # Process each text
     results = []
-    for i, text in enumerate(tqdm(texts, desc="Extracting LDA topics")):
-        try:
-            lda_result = lda_obj.extract_topics(text)
-            results.append(json.dumps(lda_result, default=str))
-        except Exception as e:
-            logging.warning(f"Failed LDA on index {i}: {e}")
-            results.append(json.dumps({}))
+    for text in texts:
+        lda_result = lda_obj.extract_topics(text)
+        results.append(json.dumps(lda_result, default=str))
 
     # Return as Series with same length
     return pl.Series(results)
 
 
-def process_tfidf_batch(series: pl.Series, tfidf_obj: TFIDFTopicExtractor) -> pl.Series:
+def process_lda_with_progress(
+    df: pl.LazyFrame,
+    final_output_path: Path,
+    batch_size: int = 50,
+    output_base_path: str = ".data/tables/lda_extracted_batches",
+    save_frequency: int = 5,
+) -> pl.LazyFrame:
     """
-    Process a batch of texts through TF-IDF.
-    Returns a Series of JSON strings with the same length as input.
+    Process LDA with enhanced batch processing, progress tracking, and partitioned output.
+
+    Args:
+        df: Input LazyFrame with content to process
+        final_output_path: Path to save the final combined result
+        batch_size: Number of records per batch
+        output_base_path: Base path for saving batch results
+        save_frequency: Save intermediate results every N batches
+
+    Returns:
+        LazyFrame with LDA results
     """
-    print("Starting TF-IDF topic extraction batch...")
+    start_time = time.time()
 
-    texts = series.to_list()
+    # Collect the data to work with concrete operations
+    logger.info("Collecting data for batch processing...")
+    data = df.collect()
+    total_records = len(data)
 
-    results = []
-    for i, text in enumerate(tqdm(texts, desc="Extracting TF-IDF topics")):
+    logger.info(f"Starting enhanced LDA processing for {total_records} records")
+    logger.info(
+        f"Batch size: {batch_size}, Save frequency: every {save_frequency} batches"
+    )
+
+    # Create output directory
+    output_path = Path(output_base_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Initialize LDA model once
+    logger.info("Initializing LDA model...")
+    lda_obj = TransformerEnhancedLDA(min_topic_size=5)
+
+    # Process in batches
+    all_results = []
+    batch_results = []
+
+    num_batches = (total_records + batch_size - 1) // batch_size
+
+    for batch_idx in range(num_batches):
+        batch_start_time = time.time()
+
+        # Calculate batch boundaries
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, total_records)
+
+        # Extract batch
+        batch_data = data.slice(start_idx, end_idx - start_idx)
+
+        logger.info(
+            f"Processing batch {batch_idx + 1}/{num_batches} (records {start_idx + 1}-{end_idx})"
+        )
+
+        # Process LDA for this batch
         try:
-            tfidf_result = tfidf_obj.extract_topics(text)
-            results.append(json.dumps(tfidf_result, default=str))
-        except Exception as e:
-            logging.warning(f"Failed TF-IDF on index {i}: {e}")
-            results.append(json.dumps({}))
+            batch_with_lda = batch_data.with_columns(
+                pl.col("content")
+                .map_batches(
+                    lambda x: process_lda_batch(x, lda_obj),
+                    return_dtype=pl.Utf8,
+                )
+                .alias("lda_topics"),
+            )
 
-    return pl.Series(results)
+            batch_results.append(batch_with_lda)
+
+            # Memory management
+            batch_end_time = time.time()
+            batch_duration = batch_end_time - batch_start_time
+
+            logger.info(
+                f"Batch {batch_idx + 1} completed in {batch_duration:.2f}s "
+                f"({(end_idx - start_idx) / batch_duration:.1f} records/sec)"
+            )
+
+            # Save intermediate results periodically
+            if (batch_idx + 1) % save_frequency == 0 or batch_idx == num_batches - 1:
+                # Combine processed batches
+                if len(batch_results) > 1:
+                    combined_batch = pl.concat(batch_results, rechunk=True)
+                else:
+                    combined_batch = batch_results[0]
+
+                # Save partition
+                partition_path = (
+                    output_path
+                    / f"batch_{batch_idx + 1 - len(batch_results) + 1}_to_{batch_idx + 1}.parquet"
+                )
+                logger.info(f"Saving partition to {partition_path}")
+                combined_batch.write_parquet(partition_path, compression="snappy")
+
+                # Add to all results and clear batch results for memory
+                all_results.append(combined_batch)
+                batch_results = []
+
+                # Force garbage collection
+                gc.collect()
+
+                # Progress summary with memory monitoring
+                elapsed_time = time.time() - start_time
+                records_processed = end_idx
+                records_remaining = total_records - records_processed
+                avg_speed = records_processed / elapsed_time
+                eta_seconds = records_remaining / avg_speed if avg_speed > 0 else 0
+
+                # Memory usage
+                process = psutil.Process()
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                memory_percent = process.memory_percent()
+
+                logger.info(
+                    f"Progress: {records_processed}/{total_records} "
+                    f"({100 * records_processed / total_records:.1f}%) | "
+                    f"Speed: {avg_speed:.1f} records/sec | "
+                    f"ETA: {eta_seconds / 60:.1f} minutes | "
+                    f"Memory: {memory_mb:.1f}MB ({memory_percent:.1f}%)"
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing batch {batch_idx + 1}: {str(e)}")
+            # Create error batch with empty LDA results
+            error_batch = batch_data.with_columns(
+                pl.lit(
+                    json.dumps({
+                        "lda_results": {"topics": []},
+                        "words": set(),
+                        "topic_labels": [],
+                        "error": str(e),
+                    })
+                ).alias("lda_topics")
+            )
+            batch_results.append(error_batch)
+            continue
+
+    # Combine all results
+    logger.info("Combining all processed batches...")
+    if len(all_results) > 1:
+        final_result = pl.concat(all_results, rechunk=True)
+    else:
+        final_result = all_results[0]
+
+    total_time = time.time() - start_time
+    logger.info(
+        f"LDA processing completed! Total time: {total_time:.2f}s "
+        f"({total_records / total_time:.1f} records/sec)"
+    )
+
+    # Save final combined result
+    logger.info(f"Saving final combined result to {final_output_path}")
+    final_result.write_parquet(final_output_path, compression="snappy", statistics=True)
+
+    return final_result.lazy()
+
 
 def process_taxonomy_batch(
     series: pl.Series, taxonomy_mapper: TopicTaxonomyMapper
@@ -78,9 +225,7 @@ def process_taxonomy_batch(
     results = []
     for lda_json in lda_results:
         lda_data = json.loads(lda_json)
-        taxonomy_result = map_lda_results_to_taxonomy(
-            taxonomy_mapper, lda_data, top_n=25, min_similarity=0.50
-        )
+        taxonomy_result = map_lda_results_to_taxonomy(taxonomy_mapper, lda_data)
         results.append(json.dumps(taxonomy_result))
 
     return pl.Series(results)
@@ -128,9 +273,21 @@ def main():
     This script is a placeholder for providing the full process to be replicated in a notebook for the assignment.
     """
 
-    # Path for processed data
+    # Number of blogs to process (0 for all) - using small number to show progress tracking
+    keep_rows = 0
+
+    # Path for processed raw data
     files_df_path = Path(".data/tables/files_df.parquet")
     posts_df_path = Path(".data/tables/posts_df.parquet")
+
+    # Path for the combined data
+    blogs_full_df_path = Path(".data/tables/blogs_full_df.parquet")
+
+    # Enhanced LDA processing with progress tracking and partitioned output
+    enhanced_lda_path = Path(f".data/tables/lda_extracted_df_final_{keep_rows}.parquet")
+
+    # Path for the LDA-taxonomy data
+    lda_taxonomy_df_path = Path(f".data/tables/lda_taxonomy_df_{keep_rows}.parquet")
 
     # First lets check if the data has already been processed, for faster development
     if posts_df_path.exists() and files_df_path.exists():
@@ -149,102 +306,94 @@ def main():
         data_processor.save_lazyframe(files_df, str(files_df_path.resolve()))
         data_processor.save_lazyframe(posts_df, str(posts_df_path.resolve()))
 
-    # Prepare an LDA-optimized dataframe
-    blog_posts_df = create_blogs_df(posts_df)
+    if blogs_full_df_path.exists():
+        logger.info("Loading blogs_full_df from cache")
+        blogs_english_transformed_df = pl.scan_parquet(blogs_full_df_path)
+    else:
+        logger.info("No blogs_full_df found, creating it")
 
-    # Join the files_df with the lda_post_df (grouped posts)
-    blogs_full_df = blog_posts_df.join(
-        files_df, left_on="file_id", right_on="id", how="left"
-    )
+        # Prepare an LDA-optimized dataframe
+        blog_posts_df = create_blogs_df(posts_df)
 
-    # Keep only a random sample if needed
-    keep_rows = 10
-    logger.info(
-        f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
-    )
+        # Join the files_df with the lda_post_df (grouped posts)
+        blogs_full_df = blog_posts_df.join(
+            files_df, left_on="file_id", right_on="id", how="left"
+        )
+        # Next we need to prepare the data for the topic extraction models
+        blogs_transformer = PostsTableTransformation(blogs_full_df)
+        blogs_transformer = (
+            blogs_transformer.detect_language()
+            .clean_up_content_column()
+            .clean_up_industry_column()
+            .get_dataframe()
+        )
+
+        # Keep only the english posts for focused analysis
+        blogs_english_transformed_df = blogs_transformer.filter(
+            pl.col("content_language") == "en"
+        )
+
+        # Save the data to the path
+        blogs_english_transformed_df.sink_parquet(
+            path=str(blogs_full_df_path.resolve()), statistics=True, mkdir=True
+        )
+
+    # If we want to keep a limited number of blogs, we can do so here
     if keep_rows > 0:
-        blogs_full_df = blogs_full_df.limit(keep_rows)
+        blogs_english_transformed_df = blogs_english_transformed_df.limit(keep_rows)
 
-    # Next we need to prepare the data for the topic extraction models
-    blogs_transformer = PostsTableTransformation(blogs_full_df)
-    blogs_transformer = (
-        blogs_transformer.detect_language().clean_up_content_column().get_dataframe()
-    )
+    if enhanced_lda_path.exists():
+        logger.info("Loading enhanced LDA results from cache")
+        blogs_lda_extracted_df = pl.scan_parquet(enhanced_lda_path)
 
-    # Keep only the english posts for focused analysis
-    blogs_english_transformed_df = blogs_transformer.filter(
-        pl.col("content_language") == "en"
-    )
+    if not enhanced_lda_path.exists():
+        logger.info("Starting enhanced LDA processing with progress tracking")
 
-    # Now we start to extract the topics in different ways
-    # Apply the LDA model to the transformed data's content column
-    lda_obj = TransformerEnhancedLDA(min_topic_size=5)
-    taxonomy_mapper = TopicTaxonomyMapper()
-
-    blogs_lda_extracted_df = blogs_english_transformed_df.with_columns(
-        pl.col("content")
-        .map_batches(
-            lambda x: process_lda_batch(x, lda_obj),
-            return_dtype=pl.Utf8,
+        # Use enhanced LDA processing with progress tracking
+        blogs_lda_extracted_df = process_lda_with_progress(
+            blogs_english_transformed_df,
+            final_output_path=enhanced_lda_path,
+            batch_size=10,  # Small batches to show progress clearly
+            output_base_path=f".data/tables/lda_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}",
+            save_frequency=2,  # Save every 2 batches for frequent updates
         )
-        .alias("lda_topics"),
-    )
 
-    # Now we can map the extracted topics to the taxonomy
-    blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
-        pl.col("lda_topics")
-        .map_batches(
-            lambda x: process_taxonomy_batch(x, taxonomy_mapper),
-            return_dtype=pl.Utf8,
+    if lda_taxonomy_df_path.exists():
+        logger.info("Loading lda_taxonomy_df from cache")
+        blogs_lda_taxonomy_df = pl.scan_parquet(lda_taxonomy_df_path)
+    else:
+        taxonomy_mapper = TopicTaxonomyMapper()
+        logger.info("No lda_taxonomy_df found, creating it")
+
+        # Now we can map the extracted topics to the taxonomy
+        blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
+            pl.col("lda_topics")
+            .map_batches(
+                lambda x: process_taxonomy_batch(x, taxonomy_mapper),
+                return_dtype=pl.Utf8,
+            )
+            .alias("lda_taxonomy_classification"),
         )
-        .alias("lda_taxonomy_classification"),
-    )
 
-    # Finally, we save this data
-    # This is temporary until we have finished the aggregation and analysis
-    blogs_lda_taxonomy_df.sink_parquet(
-        path=".data/tables/lda_taxonomy_df.parquet", statistics=True, mkdir=True
-    )
-
-    # tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
-    #
-    # # NOTE: collect first to get a regular dataframe since TFIDF extractor is not lazy
-    # full_texts = blogs_english_transformed_df.select("content").collect()["content"].to_list()
-    # tfidf_topics = tfidf_extractor.extract_topics(full_texts)
-    #
-    # blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
-    #     # pl.Series("tfidf_topics", tfidf_topics)
-    # )
-    #
-    # blogs_tfidf_extracted_df.sink_parquet(
-    #     path=".data/tables/tfidf_topics.parquet", statistics=True, mkdir=True
-    # )
-
-    # === TF-IDF Path ===
-    tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
-
-    blogs_tfidf_extracted_df = blogs_english_transformed_df.with_columns(
-        pl.col("content")
-        .map_batches(
-            lambda x: process_tfidf_batch(x, tfidf_extractor),
-            return_dtype=pl.Utf8,
+        blogs_lda_taxonomy_df.sink_parquet(
+            path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
         )
-        .alias("tfidf_topics"),
-    )
 
-    # You can also map it to taxonomy here if needed:
-    blogs_tfidf_taxonomy_df = blogs_tfidf_extracted_df.with_columns(
-        pl.col("tfidf_topics")
-        .map_batches(
-            lambda x: process_taxonomy_batch(x, taxonomy_mapper),
-            return_dtype=pl.Utf8,
-        )
-        .alias("tfidf_taxonomy_classification"),
+    # Once saved, we can run the aggregation and analysis
+    lda_aggregator = TopicTaxonomyResultsAggregator(
+        parquet_file_path=str(lda_taxonomy_df_path.resolve())
     )
-
-    # Save the final TF-IDF + taxonomy dataframe
-    blogs_tfidf_taxonomy_df.sink_parquet(
-        path=".data/tables/tfidf_taxonomy_df.parquet", statistics=True, mkdir=True
+    lda_aggregator.save_category_demographics_to_parquet(
+        filename=".data/tables/lda/category_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/lda/category_subcategory_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_biased_category_demographics_to_parquet(
+        filename=".data/tables/lda/biased_category_demographics_aggregated.parquet"
+    )
+    lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/lda/biased_category_subcategory_demographics_aggregated.parquet"
     )
 
 

@@ -229,14 +229,32 @@ class PostsTableTransformation:
         """
         # Remove any non-ascii characters from the content column
         # Also remove the value `urlLink` from the content column
+        # Remove the value `nbsp` from the content column and anything similar from a HTML entity
         self.df = self.df.with_columns(
             pl.col("content")
             .str.replace_all(r"[^a-zA-Z\s]", " ")
             .str.replace_all("urlLink", "")
+            .str.replace_all("nbsp", "")
+            .str.replace_all("&amp;", "&")
+            .str.replace_all("&lt;", "<")
+            .str.replace_all("&gt;", ">")
+            .str.replace_all("&quot;", '"')
+            .str.replace_all("&#39;", "'")
+            .str.replace_all("&ndash;", "-")
+            .str.replace_all("&mdash;", "-")
             .str.replace_all(r"\s+", " ")
             .str.strip_chars()
         )
 
+        return self
+
+    def clean_up_industry_column(self) -> "PostsTableTransformation":
+        """
+        Clean up the industry column by replacing `indUnknown` with `unknown`
+        """
+        self.df = self.df.with_columns(
+            pl.col("industry").str.replace_all("indUnknown", "unknown")
+        )
         return self
 
     def _preprocess_text(self, text: str) -> List[str]:
