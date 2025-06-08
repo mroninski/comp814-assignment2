@@ -96,9 +96,21 @@ def main():
     This script is a placeholder for providing the full process to be replicated in a notebook for the assignment.
     """
 
-    # Path for processed data
+    # Number of blogs to process (0 for all)
+    keep_rows = 0
+
+    # Path for processed raw data
     files_df_path = Path(".data/tables/files_df.parquet")
     posts_df_path = Path(".data/tables/posts_df.parquet")
+
+    # Path for the combined data
+    blogs_full_df_path = Path(".data/tables/blogs_full_df.parquet")
+
+    # Path for the LDA-extracted data
+    lda_extracted_df_path = Path(f".data/tables/lda_extracted_df_{keep_rows}.parquet")
+
+    # Path for the LDA-taxonomy data
+    lda_taxonomy_df_path = Path(f".data/tables/lda_taxonomy_df_{keep_rows}.parquet")
 
     # First lets check if the data has already been processed, for faster development
     if posts_df_path.exists() and files_df_path.exists():
@@ -117,82 +129,102 @@ def main():
         data_processor.save_lazyframe(files_df, str(files_df_path.resolve()))
         data_processor.save_lazyframe(posts_df, str(posts_df_path.resolve()))
 
-    # Prepare an LDA-optimized dataframe
-    blog_posts_df = create_blogs_df(posts_df)
+    if blogs_full_df_path.exists():
+        logger.info("Loading blogs_full_df from cache")
+        blogs_transformer = pl.scan_parquet(blogs_full_df_path)
+    else:
+        logger.info("No blogs_full_df found, creating it")
 
-    # Join the files_df with the lda_post_df (grouped posts)
-    blogs_full_df = blog_posts_df.join(
-        files_df, left_on="file_id", right_on="id", how="left"
-    )
+        # Prepare an LDA-optimized dataframe
+        blog_posts_df = create_blogs_df(posts_df)
 
-    # Keep only a random sample if needed
-    keep_rows = 0
-    logger.info(
-        f"Keeping only a random sample of {keep_rows} blogs (previously individual posts)"
-    )
+        # Join the files_df with the lda_post_df (grouped posts)
+        blogs_full_df = blog_posts_df.join(
+            files_df, left_on="file_id", right_on="id", how="left"
+        )
+        # Next we need to prepare the data for the topic extraction models
+        blogs_transformer = PostsTableTransformation(blogs_full_df)
+        blogs_transformer = (
+            blogs_transformer.detect_language()
+            .clean_up_content_column()
+            .clean_up_industry_column()
+            .get_dataframe()
+        )
+
+        # Keep only the english posts for focused analysis
+        blogs_english_transformed_df = blogs_transformer.filter(
+            pl.col("content_language") == "en"
+        )
+
+        # Save the data to the path
+        blogs_transformer.sink_parquet(
+            path=str(blogs_full_df_path.resolve()), statistics=True, mkdir=True
+        )
+
+    # If we want to keep a limited number of blogs, we can do so here
     if keep_rows > 0:
         blogs_full_df = blogs_full_df.limit(keep_rows)
 
-    # Next we need to prepare the data for the topic extraction models
-    blogs_transformer = PostsTableTransformation(blogs_full_df)
-    blogs_transformer = (
-        blogs_transformer.detect_language()
-        .clean_up_content_column()
-        .clean_up_industry_column()
-        .get_dataframe()
-    )
+    if lda_extracted_df_path.exists():
+        logger.info("Loading lda_extracted_df from cache")
+        blogs_lda_extracted_df = pl.scan_parquet(lda_extracted_df_path)
+    else:
+        logger.info("No lda_extracted_df found, creating it")
 
-    # Keep only the english posts for focused analysis
-    blogs_english_transformed_df = blogs_transformer.filter(
-        pl.col("content_language") == "en"
-    )
+        # Now we start to extract the topics in different ways
+        # Apply the LDA model to the transformed data's content column
+        lda_obj = TransformerEnhancedLDA(min_topic_size=5)
 
-    # Now we start to extract the topics in different ways
-    # Apply the LDA model to the transformed data's content column
-    lda_obj = TransformerEnhancedLDA(min_topic_size=5)
-    taxonomy_mapper = TopicTaxonomyMapper()
-
-    blogs_lda_extracted_df = blogs_english_transformed_df.with_columns(
-        pl.col("content")
-        .map_batches(
-            lambda x: process_lda_batch(x, lda_obj),
-            return_dtype=pl.Utf8,
+        blogs_lda_extracted_df = blogs_english_transformed_df.with_columns(
+            pl.col("content")
+            .map_batches(
+                lambda x: process_lda_batch(x, lda_obj),
+                return_dtype=pl.Utf8,
+            )
+            .alias("lda_topics"),
         )
-        .alias("lda_topics"),
-    )
 
-    # Now we can map the extracted topics to the taxonomy
-    blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
-        pl.col("lda_topics")
-        .map_batches(
-            lambda x: process_taxonomy_batch(x, taxonomy_mapper),
-            return_dtype=pl.Utf8,
+        # Save the lda_extracted_df to a parquet file
+        blogs_lda_extracted_df.sink_parquet(
+            path=str(lda_extracted_df_path.resolve()), statistics=True, mkdir=True
         )
-        .alias("lda_taxonomy_classification"),
-    )
 
-    # Finally, we save this data
-    # This is temporary until we have finished the aggregation and analysis
-    lda_taxonomy_df_path = Path(".data/tables/lda_taxonomy_df.parquet")
-    blogs_lda_taxonomy_df.sink_parquet(
-        path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
-    )
+    if lda_taxonomy_df_path.exists():
+        logger.info("Loading lda_taxonomy_df from cache")
+        blogs_lda_taxonomy_df = pl.scan_parquet(lda_taxonomy_df_path)
+    else:
+        taxonomy_mapper = TopicTaxonomyMapper()
+        logger.info("No lda_taxonomy_df found, creating it")
+
+        # Now we can map the extracted topics to the taxonomy
+        blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
+            pl.col("lda_topics")
+            .map_batches(
+                lambda x: process_taxonomy_batch(x, taxonomy_mapper),
+                return_dtype=pl.Utf8,
+            )
+            .alias("lda_taxonomy_classification"),
+        )
+
+        blogs_lda_taxonomy_df.sink_parquet(
+            path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
+        )
 
     # Once saved, we can run the aggregation and analysis
     lda_aggregator = TopicTaxonomyResultsAggregator(
         parquet_file_path=str(lda_taxonomy_df_path.resolve())
     )
     lda_aggregator.save_category_demographics_to_parquet(
-        filename=".data/tables/lda_category_demographics_aggregated.parquet"
+        filename=".data/tables/lda/category_demographics_aggregated.parquet"
     )
     lda_aggregator.save_category_subcategory_demographics_to_parquet(
-        filename=".data/tables/lda_category_subcategory_demographics_aggregated.parquet"
+        filename=".data/tables/lda/category_subcategory_demographics_aggregated.parquet"
     )
     lda_aggregator.save_biased_category_demographics_to_parquet(
-        filename=".data/tables/lda_biased_category_demographics_aggregated.parquet"
+        filename=".data/tables/lda/biased_category_demographics_aggregated.parquet"
     )
     lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
-        filename=".data/tables/lda_biased_category_subcategory_demographics_aggregated.parquet"
+        filename=".data/tables/lda/biased_category_subcategory_demographics_aggregated.parquet"
     )
 
 
