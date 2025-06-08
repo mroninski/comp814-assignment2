@@ -16,10 +16,9 @@ import spacy
 from gensim.models.phrases import Phraser, Phrases
 from scipy.spatial.distance import cosine
 from sentence_transformers import SentenceTransformer
-from sklearn.decomposition import PCA, LatentDirichletAllocation
+from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.feature_extraction.text import TfidfVectorizer
 from spacy.cli.download import download
-from umap import UMAP
 
 # Configure logging for production use
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
@@ -68,40 +67,6 @@ class TransformerEnhancedLDA:
 
         # Changing the max length to a very large number to avoid errors
         self.nlp_model.max_length = 100000000000000
-
-    def _clean_text(self, text: str) -> str:
-        """
-        Clean raw blog text by removing HTML artifacts and noise.
-
-        Args:
-            text: Raw blog content
-
-        Returns:
-            Cleaned text suitable for topic modeling
-        """
-        # Remove HTML tags and entities
-        text = re.sub(r"<[^>]+>", " ", text)
-        html_entities = {
-            "&nbsp;": " ",
-            "&amp;": "&",
-            "&lt;": "<",
-            "&gt;": ">",
-            "&quot;": '"',
-            "&#39;": "'",
-            "&ndash;": "-",
-            "&mdash;": "-",
-        }
-        for entity, replacement in html_entities.items():
-            text = text.replace(entity, replacement)
-
-        # Remove URLs and email addresses
-        text = re.sub(r"http[s]?://\S+", " ", text)
-        text = re.sub(r"\S+@\S+", " ", text)
-
-        # Normalize whitespace
-        text = re.sub(r"\s+", " ", text).strip()
-
-        return text
 
     def _preprocess_text(self, content: str) -> List[str]:
         """
@@ -365,8 +330,7 @@ class TransformerEnhancedLDA:
             - topic_labels: List of topic labels for downstream processing
         """
         # Step 1: Clean and preprocess content
-        clean_content = self._clean_text(blog_content)
-        documents = self._create_semantic_documents(clean_content)
+        documents = self._create_semantic_documents(blog_content)
 
         if len(documents) < 2:
             logger.warning("Insufficient content for topic modeling")
@@ -384,32 +348,15 @@ class TransformerEnhancedLDA:
         if num_topics is None:
             num_topics = self._optimize_topic_number(doc_embeddings)
 
-        # Step 5: Apply dimensionality reduction for better clustering
-        n_components = min(3, len(documents) - 1, doc_embeddings.shape[1] - 1)
-        n_components = max(1, n_components)
-
-        try:
-            if len(documents) >= 5:
-                n_neighbors = min(5, len(documents) // 2)
-                umap_model = UMAP(
-                    n_components=n_components,
-                    random_state=42,
-                    n_neighbors=n_neighbors,
-                    min_dist=0.1,
-                    metric="cosine",
-                )
-                reduced_embeddings = umap_model.fit_transform(doc_embeddings)
-            else:
-                raise ImportError("Dataset too small for UMAP")
-        except:
-            pca_model = PCA(n_components=n_components, random_state=42)
-            reduced_embeddings = pca_model.fit_transform(doc_embeddings)
-
-        # Step 6: Create document-term matrix
+        # Step 5: Create document-term matrix.
+        # For LDA, a richer vocabulary is often better. We use max_features=1000
+        # to provide the model with more words to build topics from, which is crucial for
+        # capturing nuanced themes in short texts. min_df=2 helps filter out noise by
+        # ignoring terms that appear in only one semantic document chunk.
         vectorizer = TfidfVectorizer(
-            max_features=150,
+            max_features=1000,
             ngram_range=(1, 3),
-            min_df=1,
+            min_df=2,
             max_df=0.85,
             stop_words="english",
             lowercase=True,
@@ -420,54 +367,78 @@ class TransformerEnhancedLDA:
         try:
             doc_term_matrix = vectorizer.fit_transform(enhanced_documents)
             feature_names = vectorizer.get_feature_names_out()
+        except ValueError:
+            # Fallback for very short content where min_df might be too strict
+            vectorizer_fallback = TfidfVectorizer(
+                max_features=1000,
+                ngram_range=(1, 3),
+                min_df=1,
+                max_df=0.85,
+                stop_words="english",
+                lowercase=True,
+                sublinear_tf=True,
+                smooth_idf=True,
+            )
+            doc_term_matrix = vectorizer_fallback.fit_transform(enhanced_documents)
+            feature_names = vectorizer_fallback.get_feature_names_out()
         except Exception as e:
             logger.error(f"Failed to create document-term matrix: {e}")
             return {"lda_results": {"topics": []}, "words": set(), "topic_labels": []}
 
-        # Step 7: Train LDA model with optimized parameters
+        # Step 6: Train LDA model with optimized parameters.
+        # We switch to 'online' learning, which is significantly faster for larger datasets
+        # and well-suited for a pipeline processing many records. It uses mini-batch updates,
+        # avoiding costly passes over the entire dataset. Consequently, max_iter can be reduced.
+        # The priors (doc_topic_prior, topic_word_prior) are set to low values, a common
+        # practice for short texts to encourage sparser topic and word distributions.
         lda = LatentDirichletAllocation(
             n_components=num_topics,
             random_state=42,
-            learning_method="batch",
-            max_iter=150,
+            learning_method="online",
+            max_iter=20,
             doc_topic_prior=0.1,
             topic_word_prior=0.01,
-            learning_decay=0.7,
             learning_offset=50.0,
-            perp_tol=1e-2,
-            mean_change_tol=1e-3,
         )
         lda.fit(doc_term_matrix)
 
-        # Step 8: Extract and evaluate topics
+        # Step 7: Extract, evaluate, and semantically re-rank topics.
+        # The following section processes the raw LDA output. It enriches the topics by
+        # re-ranking words based on their semantic similarity to a topic's embedding centroid,
+        # rather than relying solely on the probabilistic weights from LDA. This enhances
+        # topic interpretability.
         vocab_embeddings = self.sentence_transformer.encode(
             list(feature_names), convert_to_numpy=True
         )
         topics = []
 
         for topic_idx, topic_weights in enumerate(lda.components_):
-            # Get top words by LDA weight
+            # 1. Get initial top words based on LDA's learned topic-word distribution.
             top_indices = topic_weights.argsort()[-20:][::-1]
             top_words = [str(feature_names[idx]) for idx in top_indices]
             top_weights = topic_weights[top_indices].tolist()
 
-            # Calculate semantic coherence with topic centroid
+            # 2. Semantically refine the topic words.
+            # This moves beyond LDA's bag-of-words assumption by using transformer embeddings.
             if len(top_indices) > 0:
+                # Create a semantic "center" for the topic using the embeddings of its top words.
                 topic_centroid = np.mean(vocab_embeddings[top_indices[:8]], axis=0)
                 coherence_scores = []
                 coherent_words, coherent_weights = [], []
 
+                # 3. Re-rank words based on their cosine similarity to the topic centroid.
+                # This ensures the final words are not just probable but also semantically related.
                 for i, word_idx in enumerate(top_indices):
                     word_embedding = vocab_embeddings[word_idx]
                     similarity = 1 - cosine(topic_centroid, word_embedding)
 
-                    # Filter by semantic coherence and position
+                    # Words are kept if they are semantically close to the centroid.
                     if (similarity > 0.25 and i < 15) or similarity > 0.35:
                         coherent_words.append(top_words[i])
                         coherent_weights.append(top_weights[i])
                         coherence_scores.append(similarity)
 
-                # Ensure minimum topic size
+                # Fallback to ensure a minimum number of words per topic.
                 if len(coherent_words) < 5:
                     coherent_words = top_words[:8]
                     coherent_weights = top_weights[:8]
@@ -475,7 +446,8 @@ class TransformerEnhancedLDA:
             else:
                 coherent_words, coherent_weights, coherence_scores = [], [], []
 
-            # Calculate topic quality and create topic dictionary
+            # 4. Calculate a composite quality score for the refined topic.
+            # This score is used later to filter out low-quality or nonsensical topics.
             topic_quality = self._calculate_topic_quality(
                 coherent_words, coherent_weights, coherence_scores
             )
@@ -493,7 +465,7 @@ class TransformerEnhancedLDA:
                 else 0,
             })
 
-        # Step 9: Filter meaningful topics and prepare output
+        # Step 8: Filter meaningful topics and prepare output
         meaningful_topics = self._filter_meaningful_topics(topics)
 
         # Collect all significant words and topic labels
@@ -536,18 +508,45 @@ class TransformerEnhancedLDA:
 # Example usage for testing
 if __name__ == "__main__":
     import json
+    import time
 
-    sample_blog = """
-    Machine learning and artificial intelligence are transforming how we process data.
-    Natural language processing enables computers to understand human language.
-    Deep learning algorithms use neural networks to identify patterns in large datasets.
-    These technologies are being applied in healthcare, finance, and autonomous vehicles.
-    """
+    sample_blog = """Well this is my first entry and id like to start by saying I ve only started this because my computing class is so fucking boaring I go to Waihi college and its a decent school with alot of fucking weirdos and mentaly divergent people who think they know every thing and are loved by every one this town called Waihi is a hole its a small town thats soully dependant on a mine thats closing in about years this place is a HOLE evry one leaves as soon as they can and if they dont they end up staying for ever I  live with my mates in this renivated garage thast got its own bathroom toilet facilitys and the works I ve got a year old girl friend who s the shit and oh so beautiful I ve got heaps of mates of who im not going to name in this  except one who has his own blog here his names Mattew will s or Murk its friday im board i cant wait to get home to get absolutley Motherd and play a little X box then go out or some thing maybe get some subway or  KFC  if you read this i hope you got some injoyment from reading about some one elses life and what they get up to  If you read this I ask you Why you should be out side or in town at a mates or fucking out clubing not sitting in some pour conditioned chair at home with most the curtains closed reading about other peoples lives to make your self feel alive F I N  Sorry about the spelling Its monday and im in computing again its as boaring as always and we have a relever this time I geuss if you have read my blog you can tell im quite the hipocrate of sorts What i mean is I was a dick about the reading my blog thing at the end but its true to some extent If you have time to read this you have time to do other things as well  Im going for my lisence in a few days I know i should have it by now but i just havent gotten round to it I should be able to do it my two mates are worrying about there lives after school and what unis to go to and if thay should split up and go to different places or not They should just go with it For me who knows what ill do may be ill go to wellinton with my other mates and do a computing course or go to auckland with some girl mates of mine work with my uncle in auckland also or go to hamilton and flat with my mate even go down to otago and stay down there if i wanted with one of my mates But i more then lickly will go to australia to work on a tourisum based job living with my aunti since shes offered It will be a change for a while Who knows aye from other blogs I see you guys who read these you don t really what to know a bout us but about what we do and the people we know Any way I got a hair cut last night it was weird the stupid hair dressers have put there prices up fucking dollars for a cut instead of My girl friend has brought a car last night it was a  Mazda its pretty good but not the best looking car my friend Matthew and his enemy Sam mudgway are still at it waging war against each other its more like guerilla warfare one of then will strike a blow and then the other will and my mate I live with he sat ends he needs to decide what he s doing for the rest of his life since hes going to uni but that s really indecisive at the moment with school and work and with the ordeal of getting over his ex even though hes gone out with this hot blonde he brock up with her because he keeps thinking of his ex he hasn t gone out with his ex for the last to months he needs to get over it really my other mate I live with brought a amp for his bass guitar and hes buying a guitar this weekend in tauranga Im going with just for the ride or I could spend the day with my girl friend but who would want to do that Just to get this off my chest I shouldn t have done what I did at the after ball I really shouldn t have well that s all for now"""
 
+    print("PERFORMANCE TESTING - TOPIC EXTRACTION")
+    print("=" * 60)
+    print(f"Sample blog length: {len(sample_blog)} characters")
+    print(f"Sample blog word count: {len(sample_blog.split())} words")
+
+    # Test current implementation
     topic_model = TransformerEnhancedLDA(min_topic_size=2)
-    results = topic_model.extract_topics(sample_blog, num_topics=3)
 
-    print("REFACTORED TOPIC EXTRACTION RESULTS")
-    print("=" * 50)
-    print(f"Extracted {len(results.get('lda_results', {}).get('topics', []))} topics")
-    print(json.dumps(results, indent=2, default=str))
+    # Run multiple iterations for more reliable timing
+    num_runs = 3
+    times = []
+
+    for i in range(num_runs):
+        print(f"\nRun {i + 1}/{num_runs}:")
+        start_time = time.time()
+        results = topic_model.extract_topics(sample_blog, num_topics=3)
+        end_time = time.time()
+
+        execution_time = end_time - start_time
+        times.append(execution_time)
+
+        print(f"  Execution time: {execution_time:.3f} seconds")
+        print(
+            f"  Topics extracted: {len(results.get('lda_results', {}).get('topics', []))}"
+        )
+        print(f"  Total words: {len(results.get('words', set()))}")
+
+    avg_time = sum(times) / len(times)
+    print(f"\nAVERAGE EXECUTION TIME: {avg_time:.3f} seconds")
+
+    # Show detailed results from last run
+    print("\nDETAILED RESULTS (Last Run):")
+    print("=" * 40)
+    for i, topic in enumerate(results.get("lda_results", {}).get("topics", [])):
+        print(f"Topic {i + 1}: {topic.get('label', 'Unknown')}")
+        print(f"  Quality: {topic.get('topic_quality', 0):.3f}")
+        print(f"  Words: {', '.join(topic.get('words', [])[:5])}")
+        print()

@@ -229,10 +229,19 @@ class PostsTableTransformation:
         """
         # Remove any non-ascii characters from the content column
         # Also remove the value `urlLink` from the content column
+        # Remove the value `nbsp` from the content column and anything similar from a HTML entity
         self.df = self.df.with_columns(
             pl.col("content")
             .str.replace_all(r"[^a-zA-Z\s]", " ")
             .str.replace_all("urlLink", "")
+            .str.replace_all("nbsp", "")
+            .str.replace_all("&amp;", "&")
+            .str.replace_all("&lt;", "<")
+            .str.replace_all("&gt;", ">")
+            .str.replace_all("&quot;", '"')
+            .str.replace_all("&#39;", "'")
+            .str.replace_all("&ndash;", "-")
+            .str.replace_all("&mdash;", "-")
             .str.replace_all(r"\s+", " ")
             .str.strip_chars()
         )
