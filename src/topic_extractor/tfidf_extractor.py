@@ -7,7 +7,7 @@ import json
 import numpy as np
 import re
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 
 class TFIDFTopicExtractor:
@@ -18,40 +18,46 @@ class TFIDFTopicExtractor:
         self.vectorizer = TfidfVectorizer(max_features=self.max_features, stop_words='english')
         self.nlp_model = spacy.load("en_core_web_sm")
 
-
-    def _clean_text(self, text: str) -> str:
+    def _clean_text(self, text: Union[str, List[str]]) -> Union[str, List[str]]:
         """
-        Clean raw blog text by removing HTML artifacts and noise.
+        Clean raw blog text or list of texts by removing HTML artifacts and noise.
 
         Args:
-            text: Raw blog content
+            text: Raw blog content as a string or list of strings
 
         Returns:
-            Cleaned text suitable for topic modeling
+            Cleaned text or list of cleaned texts suitable for topic modeling
         """
-        # Remove HTML tags and entities
-        text = re.sub(r"<[^>]+>", " ", text)
-        html_entities = {
-            "&nbsp;": " ",
-            "&amp;": "&",
-            "&lt;": "<",
-            "&gt;": ">",
-            "&quot;": '"',
-            "&#39;": "'",
-            "&ndash;": "-",
-            "&mdash;": "-",
-        }
-        for entity, replacement in html_entities.items():
-            text = text.replace(entity, replacement)
 
-        # Remove URLs and email addresses
-        text = re.sub(r"http[s]?://\S+", " ", text)
-        text = re.sub(r"\S+@\S+", " ", text)
+        def clean_single(t: str) -> str:
+            # remove HTML tags
+            t = re.sub(r"<[^>]+>", " ", t)
+            # decode common HTML entities
+            html_entities = {
+                "&nbsp;": " ",
+                "&amp;": "&",
+                "&lt;": "<",
+                "&gt;": ">",
+                "&quot;": '"',
+                "&#39;": "'",
+                "&ndash;": "-",
+                "&mdash;": "-",
+            }
+            for entity, replacement in html_entities.items():
+                t = t.replace(entity, replacement)
 
-        # Normalize whitespace
-        text = re.sub(r"\s+", " ", text).strip()
+            # remove URLs and emails
+            t = re.sub(r"http[s]?://\S+", " ", t)
+            t = re.sub(r"\S+@\S+", " ", t)
 
-        return text
+            # normalize whitespace
+            t = re.sub(r"\s+", " ", t).strip()
+            return t
+
+        if isinstance(text, list):
+            return [clean_single(t) for t in text if isinstance(t, str)]
+        else:
+            return clean_single(text)
 
     # def __init__(self, min_topic_size: int = 5):
     #     """
@@ -145,37 +151,44 @@ class TFIDFTopicExtractor:
         else:
             return "_".join(words[:2])
 
-    def _create_semantic_documents(self, content: str) -> List[str]:
+    def _create_semantic_documents(self, content: Union[str, List[str]]) -> List[str]:
         """
         Create semantic documents using sentence boundaries for better topic coherence.
+        Accepts either a single string or a list of blog content strings.
 
         Args:
-            content: Cleaned blog content
+            content: Cleaned blog content (string or list of strings)
 
         Returns:
             List of semantic documents for topic modeling
         """
-        doc = self.nlp_model(content)
-        sentences = [
-            sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20
-        ]
+        if isinstance(content, str):
+            content = [content]
 
-        # Group sentences into coherent documents (2-3 sentences each)
         documents = []
-        for i in range(0, len(sentences), 2):
-            doc_text = " ".join(sentences[i: i + 3])
-            if len(doc_text.split()) >= self.min_topic_size:
-                documents.append(doc_text)
+        for entry in content:
+            if not isinstance(entry, str):
+                continue
 
-        # Fallback to token-based windowing if insufficient documents
-        if len(documents) < 3:
-            tokens = self._preprocess_text(content)
-            window_size, overlap = 30, 10
+            doc = self.nlp_model(entry)
+            sentences = [
+                sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20
+            ]
 
-            for i in range(0, len(tokens), window_size - overlap):
-                window = tokens[i: i + window_size]
-                if len(window) >= self.min_topic_size:
-                    documents.append(" ".join(window))
+            # Group sentences into coherent documents (2-3 sentences each)
+            for i in range(0, len(sentences), 2):
+                doc_text = " ".join(sentences[i: i + 3])
+                if len(doc_text.split()) >= self.min_topic_size:
+                    documents.append(doc_text)
+
+            # Fallback to token-based windowing if insufficient documents
+            if len(documents) < 3:
+                tokens = self._preprocess_text(entry)
+                window_size, overlap = 30, 10
+                for i in range(0, len(tokens), window_size - overlap):
+                    window = tokens[i: i + window_size]
+                    if len(window) >= self.min_topic_size:
+                        documents.append(" ".join(window))
 
         return documents
 
