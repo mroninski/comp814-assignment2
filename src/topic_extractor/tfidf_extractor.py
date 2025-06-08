@@ -11,10 +11,13 @@ from typing import Dict, List, Optional
 
 
 class TFIDFTopicExtractor:
-    def __init__(self, max_features=1000, top_n=5):
-        self.nlp_model = spacy.load("en_core_web_sm")
-        self.vectorizer = TfidfVectorizer(max_features=max_features, stop_words='english')
+    def __init__(self, top_n: int = 5, min_topic_size: int = 5, max_features: int = 1000):
         self.top_n = top_n
+        self.min_topic_size = min_topic_size
+        self.max_features = max_features
+        self.vectorizer = TfidfVectorizer(max_features=self.max_features, stop_words='english')
+        self.nlp_model = spacy.load("en_core_web_sm")
+
 
     def _clean_text(self, text: str) -> str:
         """
@@ -50,15 +53,15 @@ class TFIDFTopicExtractor:
 
         return text
 
-    def __init__(self, min_topic_size: int = 5):
-        """
-        Initialize the topic extraction model.
-
-        Args:
-            min_topic_size: Minimum number of words required to form a meaningful topic
-        """
-        self.min_topic_size = min_topic_size
-        self._initialize_models()
+    # def __init__(self, min_topic_size: int = 5):
+    #     """
+    #     Initialize the topic extraction model.
+    #
+    #     Args:
+    #         min_topic_size: Minimum number of words required to form a meaningful topic
+    #     """
+    #     self.min_topic_size = min_topic_size
+    #     self._initialize_models()
 
     def _preprocess_text(self, content: str) -> List[str]:
         """
@@ -177,16 +180,18 @@ class TFIDFTopicExtractor:
         return documents
 
     def extract_topics(self, blog_content: str, num_words: int = 10) -> Dict:
+        # Preprocess text
         clean_content = self._clean_text(blog_content)
         documents = self._create_semantic_documents(clean_content)
 
         if not documents:
             return {
-                "tfidf_results": {"topics": []},
+                "tfidf_results": {"topics": [], "num_topics": 0, "document_count": 0, "average_topic_quality": 0.0},
                 "words": set(),
                 "topic_labels": []
             }
 
+        # Create TF-IDF matrix
         doc_term_matrix = self.vectorizer.fit_transform(documents)
         feature_names = self.vectorizer.get_feature_names_out()
 
@@ -194,9 +199,11 @@ class TFIDFTopicExtractor:
         all_words = set()
         topic_labels = []
 
+        # Process each document row
         for doc_idx, row in enumerate(doc_term_matrix):
             row_array = row.toarray().flatten()
             top_indices = np.argsort(row_array)[::-1][:self.top_n]
+
             top_words = [feature_names[i] for i in top_indices if row_array[i] > 0]
             top_weights = [row_array[i] for i in top_indices if row_array[i] > 0]
 
@@ -213,7 +220,7 @@ class TFIDFTopicExtractor:
                     "topic_quality": float(np.mean(top_weights[:num_words]))
                 })
 
-        meaningful_topics = self._filter_meaningful_topics(topics)
+        meaningful_topics = self._filter_meaningful_tfidf_topics(topics)
 
         return {
             "tfidf_results": {
@@ -221,11 +228,48 @@ class TFIDFTopicExtractor:
                 "num_topics": len(meaningful_topics),
                 "document_count": len(documents),
                 "average_topic_quality": float(
-                    np.mean([t["topic_quality"] for t in meaningful_topics])) if meaningful_topics else 0.0
+                    np.mean([t["topic_quality"] for t in meaningful_topics])
+                ) if meaningful_topics else 0.0
             },
             "words": all_words,
             "topic_labels": topic_labels
         }
+
+    def _filter_meaningful_tfidf_topics(self, topics: List[Dict]) -> List[Dict]:
+        if not topics:
+            return []
+
+        qualities = [t["topic_quality"] for t in topics]
+        max_quality = max(qualities)
+        mean_quality = np.mean(qualities)
+
+        threshold = 0.7 * max_quality if max_quality > 0.3 else max(0.8 * max_quality, mean_quality)
+        threshold = max(threshold, 0.01)
+
+        meaningful_topics = []
+        for topic in sorted(topics, key=lambda x: x["topic_quality"], reverse=True):
+            if topic["topic_quality"] >= threshold:
+                topic_words = topic.get("words", [])
+                if not isinstance(topic_words, list):
+                    topic_words = list(topic_words)  # fallback for safety
+
+                topic_set = set(topic_words[:5])
+                is_unique = True
+
+                for existing in meaningful_topics:
+                    existing_words = existing.get("words", [])
+                    if not isinstance(existing_words, list):
+                        existing_words = list(existing_words)
+                    existing_set = set(existing_words[:5])
+                    overlap_ratio = len(topic_set & existing_set) / max(1, min(len(topic_set), len(existing_set)))
+                    if overlap_ratio > 0.6:
+                        is_unique = False
+                        break
+
+                if is_unique:
+                    meaningful_topics.append(topic)
+
+        return meaningful_topics[:3]
 
 
 # Example usage for testing
@@ -247,5 +291,10 @@ if __name__ == "__main__":
 
     print("TF-IDF TOPIC EXTRACTION RESULTS")
     print("=" * 50)
-    for i, topic_json in enumerate(results):
-        print(f"Doc {i + 1} Top Terms: {json.loads(topic_json)}")
+
+    for i, topic in enumerate(results["tfidf_results"]["topics"]):
+        print(f"Topic {i + 1} | Label: {topic['label']}")
+        print(f"Top Words: {topic['words']}")
+        print(f"Quality: {topic['topic_quality']:.3f}")
+        print("-" * 30)
+
