@@ -59,16 +59,6 @@ class TFIDFTopicExtractor:
         else:
             return clean_single(text)
 
-    # def __init__(self, min_topic_size: int = 5):
-    #     """
-    #     Initialize the topic extraction model.
-    #
-    #     Args:
-    #         min_topic_size: Minimum number of words required to form a meaningful topic
-    #     """
-    #     self.min_topic_size = min_topic_size
-    #     self._initialize_models()
-
     def _preprocess_text(self, content: str) -> List[str]:
         """
         Extract meaningful tokens from content using spaCy processing.
@@ -193,96 +183,43 @@ class TFIDFTopicExtractor:
         return documents
 
     def extract_topics(self, blog_content: str, num_words: int = 10) -> Dict:
-        # Preprocess text
         clean_content = self._clean_text(blog_content)
-        documents = self._create_semantic_documents(clean_content)
+        tokens = self._preprocess_text(clean_content)
+        document = " ".join(tokens)
 
-        if not documents:
+        if not document.strip():
             return {
                 "tfidf_results": {"topics": [], "num_topics": 0, "document_count": 0, "average_topic_quality": 0.0},
                 "words": set(),
                 "topic_labels": []
             }
 
-        # Create TF-IDF matrix
-        doc_term_matrix = self.vectorizer.fit_transform(documents)
+        # Vectorize single document (wrapped in list)
+        tfidf_matrix = self.vectorizer.fit_transform([document])
         feature_names = self.vectorizer.get_feature_names_out()
+        row = tfidf_matrix.toarray().flatten()
 
-        topics = []
-        all_words = set()
-        topic_labels = []
-
-        # Process each document row
-        for doc_idx, row in enumerate(doc_term_matrix):
-            row_array = row.toarray().flatten()
-            top_indices = np.argsort(row_array)[::-1][:self.top_n]
-
-            top_words = [feature_names[i] for i in top_indices if row_array[i] > 0]
-            top_weights = [row_array[i] for i in top_indices if row_array[i] > 0]
-
-            if top_words:
-                topic_label = self._generate_topic_label(top_words)
-                all_words.update(top_words)
-                topic_labels.extend(topic_label.split("_"))
-
-                topics.append({
-                    "topic_id": doc_idx,
-                    "label": topic_label,
-                    "words": top_words[:num_words],
-                    "weights": top_weights[:num_words],
-                    "topic_quality": float(np.mean(top_weights[:num_words]))
-                })
-
-        meaningful_topics = self._filter_meaningful_tfidf_topics(topics)
+        # Get top-N indices
+        top_indices = np.argsort(row)[::-1][:self.top_n]
+        top_words = [feature_names[i] for i in top_indices if row[i] > 0]
+        top_weights = [row[i] for i in top_indices if row[i] > 0]
 
         return {
             "tfidf_results": {
-                "topics": meaningful_topics,
-                "num_topics": len(meaningful_topics),
-                "document_count": len(documents),
-                "average_topic_quality": float(
-                    np.mean([t["topic_quality"] for t in meaningful_topics])
-                ) if meaningful_topics else 0.0
+                "topics": [{
+                    "topic_id": 0,
+                    "label": " ".join(top_words[:2]),  # or just use a static label like "blog_topic"
+                    "words": top_words[:num_words],
+                    "weights": top_weights[:num_words],
+                    "topic_quality": float(np.mean(top_weights[:num_words]))
+                }] if top_words else [],
+                "num_topics": 1 if top_words else 0,
+                "document_count": 1,
+                "average_topic_quality": float(np.mean(top_weights)) if top_weights else 0.0
             },
-            "words": all_words,
-            "topic_labels": topic_labels
+            "words": set(top_words),
+            "topic_labels": top_words[:2]
         }
-
-    def _filter_meaningful_tfidf_topics(self, topics: List[Dict]) -> List[Dict]:
-        if not topics:
-            return []
-
-        qualities = [t["topic_quality"] for t in topics]
-        max_quality = max(qualities)
-        mean_quality = np.mean(qualities)
-
-        threshold = 0.7 * max_quality if max_quality > 0.3 else max(0.8 * max_quality, mean_quality)
-        threshold = max(threshold, 0.01)
-
-        meaningful_topics = []
-        for topic in sorted(topics, key=lambda x: x["topic_quality"], reverse=True):
-            if topic["topic_quality"] >= threshold:
-                topic_words = topic.get("words", [])
-                if not isinstance(topic_words, list):
-                    topic_words = list(topic_words)  # fallback for safety
-
-                topic_set = set(topic_words[:5])
-                is_unique = True
-
-                for existing in meaningful_topics:
-                    existing_words = existing.get("words", [])
-                    if not isinstance(existing_words, list):
-                        existing_words = list(existing_words)
-                    existing_set = set(existing_words[:5])
-                    overlap_ratio = len(topic_set & existing_set) / max(1, min(len(topic_set), len(existing_set)))
-                    if overlap_ratio > 0.6:
-                        is_unique = False
-                        break
-
-                if is_unique:
-                    meaningful_topics.append(topic)
-
-        return meaningful_topics[:3]
 
 
 # Example usage for testing

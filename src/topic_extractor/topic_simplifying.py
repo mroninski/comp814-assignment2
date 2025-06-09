@@ -408,3 +408,74 @@ def _create_weighted_embedding(
     final_weights = final_weights / np.sum(final_weights)
 
     return np.average(embeddings, axis=0, weights=final_weights)
+
+
+def map_tfidf_results_to_taxonomy(
+    mapper: TopicTaxonomyMapper,
+    tfidf_results: Dict[str, Any],
+    top_n: int = 25,
+    min_similarity: float = 0.50,
+) -> Dict[str, float]:
+    """
+    Map TF-IDF topic extraction results to taxonomy using semantic similarity.
+    """
+    if not tfidf_results or "tfidf_results" not in tfidf_results:
+        logger.error("Invalid TF-IDF results structure")
+        return {}
+
+    topics_to_analyze = tfidf_results["tfidf_results"].get("topics", [])
+    if not topics_to_analyze:
+        logger.warning("No topics found in TF-IDF results")
+        return {}
+
+    all_results = {}
+
+    for topic in topics_to_analyze:
+        topic_id = topic.get("topic_id", "unknown")
+        words = topic.get("words", [])
+        weights = topic.get("weights", [])
+        topic_quality = topic.get("topic_quality", 0.5)
+        coherence_scores = [0.5] * len(words)  # fallback, TF-IDF doesn't include this
+
+        if not words or not weights or len(words) != len(weights):
+            logger.warning(f"Topic {topic_id} has invalid format, skipping")
+            continue
+
+        # Use same logic for top words as LDA mapping
+        word_data = list(zip(words, weights, coherence_scores))
+        word_data.sort(key=lambda x: x[1], reverse=True)
+        threshold = np.percentile(weights, 60) if len(weights) > 3 else min(weights)
+        selected_data = [item for item in word_data if item[1] >= threshold]
+        if len(selected_data) < 3:
+            selected_data = word_data[:3]
+
+        selected_words = [item[0] for item in selected_data]
+        selected_weights = [item[1] for item in selected_data]
+        selected_coherence = [item[2] for item in selected_data]
+
+        topic_embedding = _create_weighted_embedding(
+            selected_words, selected_weights, selected_coherence, mapper
+        )
+
+        if topic_embedding is None:
+            continue
+
+        subtopic_similarities = mapper._compute_semantic_similarity(
+            topic_embedding, mapper.subtopic_embeddings
+        )
+
+        quality_multiplier = 0.5 + (topic_quality * 0.5)
+
+        for subtopic, similarity in subtopic_similarities.items():
+            weighted_similarity = similarity * quality_multiplier
+            if weighted_similarity < min_similarity:
+                continue
+
+            major_topic = mapper.subtopic_to_major[subtopic]
+            key = f"{major_topic}:{subtopic}"
+            percentage = round(weighted_similarity * 100, 2)
+
+            if key not in all_results or percentage > all_results[key]:
+                all_results[key] = percentage
+
+    return dict(sorted(all_results.items(), key=lambda x: x[1], reverse=True)[:top_n])

@@ -9,6 +9,7 @@ from datetime import datetime
 import argparse
 import sys
 import shutil
+import os
 
 import polars as pl
 
@@ -245,7 +246,7 @@ def process_tfidf_with_progress(
     Similar to LDA's progress processor but for TF-IDF.
     """
     start_time = time.time()
-    data = df.select(["file_id", "age", "gender", "content"]).collect()
+    data = df.collect()
     total_records = len(data)
     logger.info(f"Starting TF-IDF for {total_records} records")
 
@@ -289,9 +290,12 @@ def process_tfidf_with_progress(
             batch_results.append(error_batch)
 
     final_result = pl.concat(all_results, rechunk=True) if all_results else pl.DataFrame()
+
+    logger.info(f"TF-IDF completed with {final_result.height} rows and {final_result.width} columns")
+    logger.info(f"Writing final TF-IDF results to {final_output_path}")
+
     final_result.write_parquet(final_output_path, compression="snappy", statistics=True)
     return final_result.lazy()
-
 
 
 def process_taxonomy_batch(
@@ -392,6 +396,7 @@ def main():
 
         blogs_english_transformed_df = pl.scan_parquet(blogs_full_df_path)
         print(blogs_english_transformed_df.schema)
+        blogs_full_df = blogs_english_transformed_df
     else:
         logger.info("No blogs_full_df found, creating it")
 
@@ -478,63 +483,79 @@ def main():
     lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
         filename=".data/tables/lda/biased_category_subcategory_demographics_aggregated.parquet"
     )
-    # === TF-IDF Topic Extraction Path ===
-    tfidf_enhanced_path = Path(f".data/tables/tfidf_topics_df_{keep_rows}.parquet")
 
-    if tfidf_enhanced_path.exists():
-        logger.info("Loading enhanced TF-IDF results from cache")
-        blogs_tfidf_taxonomy_df = pl.scan_parquet(tfidf_enhanced_path)
+    # === TF-IDF Processing Paths ===
+
+    # Path for the LDA-taxonomy data
+    tfidf_taxonomy_df_path = Path(f".data/tables/tfidf_taxonomy_df_{keep_rows}.parquet")
+
+    df = pl.read_parquet(".data/tables/blogs_full_df.parquet")
+    print(df.schema)
+
+    tfidf_output_path = Path(f".data/tables/tfidf_extracted_df_final_{keep_rows}.parquet")
+
+    tfidf_batches_path = f".data/tables/tfidf_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}"
+
+    if tfidf_output_path.exists():
+        logger.info("Loading TF-IDF results from cache")
+        blogs_tfidf_extracted_df = pl.scan_parquet(tfidf_output_path)
+
     else:
-        logger.info("Running TF-IDF topic extraction with batching")
-        tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
-
-        blogs_english_transformed_df = blogs_english_transformed_df.join(
-            files_df.select(["id"]).rename({"id": "file_id"}),
-            on="file_id",
-            how="left"
-        )
+        logger.info("Starting TF-IDF processing with progress tracking")
 
 
         blogs_tfidf_extracted_df = process_tfidf_with_progress(
-            df=blogs_english_transformed_df,
-            tfidf_obj=tfidf_extractor,
-            final_output_path=tfidf_enhanced_path,
+            blogs_english_transformed_df,
+            output_base_path=tfidf_batches_path,
+            final_output_path=tfidf_output_path,
             batch_size=10,
-            output_base_path=f".data/tables/tfidf_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}",
             save_frequency=2,
+            tfidf_obj=TFIDFTopicExtractor(top_n=5, max_features=1000)
         )
 
-        taxonomy_mapper = TopicTaxonomyMapper()
-        blogs_tfidf_taxonomy_df = blogs_tfidf_extracted_df.with_columns(
-            pl.col("tfidf_topics")
-            .map_batches(
-                lambda x: process_taxonomy_batch(x, taxonomy_mapper),
-                return_dtype=pl.Utf8,
+        if tfidf_taxonomy_df_path.exists():
+            logger.info("Loading tfidf_taxonomy_df from cache")
+            blogs_tfidf_taxonomy_df = pl.scan_parquet(tfidf_taxonomy_df_path)
+        else:
+            taxonomy_mapper = TopicTaxonomyMapper()
+            logger.info("No tfidf_taxonomy_df found, creating it")
+
+            # Map TF-IDF topics to the taxonomy
+            blogs_tfidf_taxonomy_df = blogs_tfidf_extracted_df.with_columns(
+                pl.col("tfidf_topics")
+                .map_batches(
+                    lambda x: process_taxonomy_batch(x, taxonomy_mapper, ),
+                    return_dtype=pl.Utf8,
+                )
+                .alias("tfidf_taxonomy_classification"),
             )
-            .alias("tfidf_taxonomy_classification")
-        )
 
-        blogs_tfidf_taxonomy_df.sink_parquet(
-            path=str(tfidf_enhanced_path.resolve()), statistics=True, mkdir=True
-        )
+            blogs_tfidf_taxonomy_df.sink_parquet(
+                path=str(tfidf_taxonomy_df_path.resolve()), statistics=True, mkdir=True
+            )
 
-    # === TF-IDF Aggregation and Export Path ===
-    tfidf_aggregator = TFIDFTaxonomyResultsAggregator(
-        parquet_file_path=str(tfidf_enhanced_path.resolve())
-    )
 
-    tfidf_aggregator.save_category_demographics_to_parquet(
-        filename=".data/tables/tfidf/category_demographics_aggregated.parquet"
-    )
-    tfidf_aggregator.save_category_subcategory_demographics_to_parquet(
-        filename=".data/tables/tfidf/category_subcategory_demographics_aggregated.parquet"
-    )
-    tfidf_aggregator.save_biased_category_demographics_to_parquet(
-        filename=".data/tables/tfidf/biased_category_demographics_aggregated.parquet"
-    )
-    tfidf_aggregator.save_biased_category_subcategory_demographics_to_parquet(
-        filename=".data/tables/tfidf/biased_category_subcategory_demographics_aggregated.parquet"
-    )
+    #
+    # # Save enriched DataFrame with demographics
+    # blogs_tfidf_taxonomy_df.sink_parquet(str(tfidf_enhanced_path.resolve()), statistics=True)
+    #
+    # # === TF-IDF Aggregation and Export Path ===
+    # tfidf_aggregator = TFIDFTaxonomyResultsAggregator(
+    #     parquet_file_path=str(tfidf_enhanced_path.resolve())
+    # )
+    #
+    # tfidf_aggregator.save_category_demographics_to_parquet(
+    #     filename=".data/tables/tfidf/category_demographics_aggregated.parquet"
+    # )
+    # tfidf_aggregator.save_category_subcategory_demographics_to_parquet(
+    #     filename=".data/tables/tfidf/category_subcategory_demographics_aggregated.parquet"
+    # )
+    # tfidf_aggregator.save_biased_category_demographics_to_parquet(
+    #     filename=".data/tables/tfidf/biased_category_demographics_aggregated.parquet"
+    # )
+    # tfidf_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+    #     filename=".data/tables/tfidf/biased_category_subcategory_demographics_aggregated.parquet"
+    # )
 
 
 if __name__ == "__main__":

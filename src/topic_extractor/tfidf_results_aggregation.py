@@ -29,7 +29,9 @@ class TFIDFTaxonomyResultsAggregator:
         self.category_subcategory_aggregations = {}
         self.biased_category_aggregations: Dict[str, Dict[str, float]] = {}
         self.biased_category_subcategory_aggregations: Dict[str, Dict[str, float]] = {}
+        print(f"[DEBUG] Schema BEFORE demographics prep: {self.df.schema}")
         self._prepare_demographics()
+        print(f"[DEBUG] Schema AFTER demographics prep: {self.df.schema}")
         self._aggregate_by_demographics()
         self._calculate_popularity_bias_adjustment()
 
