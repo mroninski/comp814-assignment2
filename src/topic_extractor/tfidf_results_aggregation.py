@@ -64,6 +64,9 @@ class TFIDFTaxonomyResultsAggregator:
             (pl.col("industry") == "Student").alias("is_student")
         ])
 
+        print("[DEBUG] Sample classifications:")
+        print(self.df.select("tfidf_taxonomy_classification").head(10))
+
     def _parse_tfidf_classification_json(self, json_str: str) -> Dict[str, float]:
         """
         Parse the tfidf taxonomy classification JSON string.
@@ -184,6 +187,9 @@ class TFIDFTaxonomyResultsAggregator:
             "Everyone": self.df,
         }
 
+        for name, demo_df in demographics.items():
+            print(f"[DEBUG] {name} rows: {demo_df.height}")
+
         category_results = {}
         category_subcategory_results = {}
 
@@ -197,6 +203,9 @@ class TFIDFTaxonomyResultsAggregator:
                         demo_df
                     )
                 )
+        print("[DEBUG] category_results keys:", list(category_results.keys()))
+        for key, val in category_results.items():
+            print(f"[DEBUG] {key} has {len(val)} classifications")
 
         self.category_aggregations = category_results
         self.category_subcategory_aggregations = category_subcategory_results
@@ -404,12 +413,19 @@ class TFIDFTaxonomyResultsAggregator:
         )
 
     def creat_and_sort_rank_column(
-        self, temp_df: pl.DataFrame, score_column: str = "average_weighted_score"
+            self, temp_df: pl.DataFrame, score_column: str = "average_weighted_score"
     ) -> pl.DataFrame:
         """
         Create and sort a rank column based on a score column within each demographic.
         """
-        # The rank should be based on the score within each demographic
+        if "demographic" not in temp_df.columns:
+            print("[DEBUG] 'demographic' column not found in temp_df. Columns:", temp_df.columns)
+            return temp_df  # return as-is or raise a custom error
+
+        if temp_df.is_empty():
+            print("[DEBUG] temp_df is empty. Skipping ranking.")
+            return temp_df
+
         df_results = temp_df.with_columns(
             pl.col(score_column)
             .rank(method="ordinal", descending=True)
@@ -417,9 +433,7 @@ class TFIDFTaxonomyResultsAggregator:
             .alias("rank")
         )
 
-        # Just to make the output more readable, we sort by demographic
         df_results = df_results.sort(["demographic", "rank"])
-
         return df_results
 
     def get_category_demographics_dataframe(self) -> pl.DataFrame:

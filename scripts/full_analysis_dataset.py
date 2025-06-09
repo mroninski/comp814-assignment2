@@ -22,6 +22,7 @@ from topic_extractor.topic_simplifying import (
     map_lda_results_to_taxonomy,
 )
 from topic_extractor.tfidf_extractor import TFIDFTopicExtractor
+from topic_extractor.tfidf_topic_simplifying import (TFIDFTaxonomyMapper, map_tfidf_results_to_taxonomy)
 
 from topic_extractor.tfidf_results_aggregation import TFIDFTaxonomyResultsAggregator
 
@@ -315,6 +316,22 @@ def process_taxonomy_batch(
 
     return pl.Series(results)
 
+def process_tfidf_taxonomy_batch(
+    series: pl.Series, taxonomy_mapper: TFIDFTaxonomyMapper
+) -> pl.Series:
+    """
+    Process taxonomy mapping for a batch.
+    Returns a Series of JSON strings with the same length as input.
+    """
+    tfidf_results = series.to_list()
+
+    results = []
+    for tfidf_json in tfidf_results:
+        tfidf_data = json.loads(tfidf_json)
+        taxonomy_result = map_tfidf_results_to_taxonomy(taxonomy_mapper, tfidf_data)
+        results.append(json.dumps(taxonomy_result))
+
+    return pl.Series(results)
 
 def create_blogs_df(posts_df: pl.LazyFrame) -> pl.LazyFrame:
     """
@@ -496,6 +513,8 @@ def main():
 
     tfidf_batches_path = f".data/tables/tfidf_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}"
 
+    tfidf_enhanced_path = Path(f".data/tables/tfidf_extracted_df_final_{keep_rows}.parquet")
+
     if tfidf_output_path.exists():
         logger.info("Loading TF-IDF results from cache")
         blogs_tfidf_extracted_df = pl.scan_parquet(tfidf_output_path)
@@ -517,14 +536,14 @@ def main():
             logger.info("Loading tfidf_taxonomy_df from cache")
             blogs_tfidf_taxonomy_df = pl.scan_parquet(tfidf_taxonomy_df_path)
         else:
-            taxonomy_mapper = TopicTaxonomyMapper()
+            taxonomy_mapper = TFIDFTaxonomyMapper()
             logger.info("No tfidf_taxonomy_df found, creating it")
 
             # Map TF-IDF topics to the taxonomy
             blogs_tfidf_taxonomy_df = blogs_tfidf_extracted_df.with_columns(
                 pl.col("tfidf_topics")
                 .map_batches(
-                    lambda x: process_taxonomy_batch(x, taxonomy_mapper, ),
+                    lambda x: process_tfidf_taxonomy_batch(x, taxonomy_mapper, ),
                     return_dtype=pl.Utf8,
                 )
                 .alias("tfidf_taxonomy_classification"),
@@ -535,27 +554,27 @@ def main():
             )
 
 
-    #
-    # # Save enriched DataFrame with demographics
-    # blogs_tfidf_taxonomy_df.sink_parquet(str(tfidf_enhanced_path.resolve()), statistics=True)
-    #
-    # # === TF-IDF Aggregation and Export Path ===
-    # tfidf_aggregator = TFIDFTaxonomyResultsAggregator(
-    #     parquet_file_path=str(tfidf_enhanced_path.resolve())
-    # )
-    #
-    # tfidf_aggregator.save_category_demographics_to_parquet(
-    #     filename=".data/tables/tfidf/category_demographics_aggregated.parquet"
-    # )
-    # tfidf_aggregator.save_category_subcategory_demographics_to_parquet(
-    #     filename=".data/tables/tfidf/category_subcategory_demographics_aggregated.parquet"
-    # )
-    # tfidf_aggregator.save_biased_category_demographics_to_parquet(
-    #     filename=".data/tables/tfidf/biased_category_demographics_aggregated.parquet"
-    # )
-    # tfidf_aggregator.save_biased_category_subcategory_demographics_to_parquet(
-    #     filename=".data/tables/tfidf/biased_category_subcategory_demographics_aggregated.parquet"
-    # )
+
+    # Save enriched DataFrame with demographics
+    blogs_tfidf_taxonomy_df.sink_parquet(str(tfidf_enhanced_path.resolve()), statistics=True)
+
+    # === TF-IDF Aggregation and Export Path ===
+    tfidf_aggregator = TFIDFTaxonomyResultsAggregator(
+        parquet_file_path=str(tfidf_enhanced_path.resolve())
+    )
+
+    tfidf_aggregator.save_category_demographics_to_parquet(
+        filename=".data/tables/tfidf/category_demographics_aggregated.parquet"
+    )
+    tfidf_aggregator.save_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/tfidf/category_subcategory_demographics_aggregated.parquet"
+    )
+    tfidf_aggregator.save_biased_category_demographics_to_parquet(
+        filename=".data/tables/tfidf/biased_category_demographics_aggregated.parquet"
+    )
+    tfidf_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/tfidf/biased_category_subcategory_demographics_aggregated.parquet"
+    )
 
 
 if __name__ == "__main__":
