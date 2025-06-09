@@ -20,6 +20,9 @@ from topic_extractor.topic_simplifying import (
     TopicTaxonomyMapper,
     map_lda_results_to_taxonomy,
 )
+from topic_extractor.tfidf_extractor import TFIDFTopicExtractor
+
+from topic_extractor.tfidf_results_aggregation import TFIDFTaxonomyResultsAggregator
 
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
@@ -213,6 +216,84 @@ def process_lda_with_progress(
     return final_result.lazy()
 
 
+def process_tfidf_batch(series: pl.Series, tfidf_obj: TFIDFTopicExtractor) -> pl.Series:
+    """
+    Process a batch of texts through TF-IDF.
+    Returns a Series of JSON strings with the same length as input.
+    """
+    texts = series.to_list()
+    results = []
+    for text in texts:
+        try:
+            tfidf_result = tfidf_obj.extract_topics(text)
+            results.append(json.dumps(tfidf_result, default=str))
+        except Exception as e:
+            logging.warning(f"TF-IDF failed: {e}")
+            results.append(json.dumps({"tfidf_results": {"topics": []}}))
+    return pl.Series(results)
+
+
+def process_tfidf_with_progress(
+    df: pl.LazyFrame,
+    tfidf_obj: TFIDFTopicExtractor,
+    final_output_path: Path,
+    batch_size: int = 50,
+    output_base_path: str = ".data/tables/tfidf_extracted_batches",
+    save_frequency: int = 5,
+) -> pl.LazyFrame:
+    """
+    Similar to LDA's progress processor but for TF-IDF.
+    """
+    start_time = time.time()
+    data = df.select(["file_id", "age", "gender", "content"]).collect()
+    total_records = len(data)
+    logger.info(f"Starting TF-IDF for {total_records} records")
+
+    output_path = Path(output_base_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    all_results = []
+    batch_results = []
+    num_batches = (total_records + batch_size - 1) // batch_size
+
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, total_records)
+        batch_data = data.slice(start_idx, end_idx - start_idx)
+
+        logger.info(f"Processing TF-IDF batch {batch_idx + 1}/{num_batches}")
+
+        try:
+            tfidf_outputs = process_tfidf_batch(batch_data["content"], tfidf_obj)
+
+            batch_with_tfidf = batch_data.with_columns(
+                pl.Series(name="tfidf_topics", values=tfidf_outputs)
+            )
+
+            batch_results.append(batch_with_tfidf)
+
+            if (batch_idx + 1) % save_frequency == 0 or batch_idx == num_batches - 1:
+                combined = pl.concat(batch_results, rechunk=True)
+                partition_path = output_path / f"batch_{batch_idx + 1}.parquet"
+                logger.info(f"Saving TF-IDF partition to {partition_path}")
+                combined.write_parquet(partition_path, compression="snappy")
+                all_results.append(combined)
+                batch_results = []
+                gc.collect()
+
+        except Exception as e:
+            logger.error(f"TF-IDF batch {batch_idx + 1} failed: {e}")
+            error_batch = batch_data.with_columns(
+                pl.lit(json.dumps({"tfidf_results": {"topics": []}, "error": str(e)})).alias("tfidf_topics")
+            )
+            batch_results.append(error_batch)
+
+    final_result = pl.concat(all_results, rechunk=True) if all_results else pl.DataFrame()
+    final_result.write_parquet(final_output_path, compression="snappy", statistics=True)
+    return final_result.lazy()
+
+
+
 def process_taxonomy_batch(
     series: pl.Series, taxonomy_mapper: TopicTaxonomyMapper
 ) -> pl.Series:
@@ -274,7 +355,7 @@ def main():
     """
 
     # Number of blogs to process (0 for all) - using small number to show progress tracking
-    keep_rows = 0
+    keep_rows = 10
 
     # Path for processed raw data
     files_df_path = Path(".data/tables/files_df.parquet")
@@ -308,7 +389,9 @@ def main():
 
     if blogs_full_df_path.exists():
         logger.info("Loading blogs_full_df from cache")
+
         blogs_english_transformed_df = pl.scan_parquet(blogs_full_df_path)
+        print(blogs_english_transformed_df.schema)
     else:
         logger.info("No blogs_full_df found, creating it")
 
@@ -394,6 +477,63 @@ def main():
     )
     lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
         filename=".data/tables/lda/biased_category_subcategory_demographics_aggregated.parquet"
+    )
+    # === TF-IDF Topic Extraction Path ===
+    tfidf_enhanced_path = Path(f".data/tables/tfidf_topics_df_{keep_rows}.parquet")
+
+    if tfidf_enhanced_path.exists():
+        logger.info("Loading enhanced TF-IDF results from cache")
+        blogs_tfidf_taxonomy_df = pl.scan_parquet(tfidf_enhanced_path)
+    else:
+        logger.info("Running TF-IDF topic extraction with batching")
+        tfidf_extractor = TFIDFTopicExtractor(max_features=1000, top_n=5)
+
+        blogs_english_transformed_df = blogs_english_transformed_df.join(
+            files_df.select(["id"]).rename({"id": "file_id"}),
+            on="file_id",
+            how="left"
+        )
+
+
+        blogs_tfidf_extracted_df = process_tfidf_with_progress(
+            df=blogs_english_transformed_df,
+            tfidf_obj=tfidf_extractor,
+            final_output_path=tfidf_enhanced_path,
+            batch_size=10,
+            output_base_path=f".data/tables/tfidf_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}",
+            save_frequency=2,
+        )
+
+        taxonomy_mapper = TopicTaxonomyMapper()
+        blogs_tfidf_taxonomy_df = blogs_tfidf_extracted_df.with_columns(
+            pl.col("tfidf_topics")
+            .map_batches(
+                lambda x: process_taxonomy_batch(x, taxonomy_mapper),
+                return_dtype=pl.Utf8,
+            )
+            .alias("tfidf_taxonomy_classification")
+        )
+
+        blogs_tfidf_taxonomy_df.sink_parquet(
+            path=str(tfidf_enhanced_path.resolve()), statistics=True, mkdir=True
+        )
+
+    # === TF-IDF Aggregation and Export Path ===
+    tfidf_aggregator = TFIDFTaxonomyResultsAggregator(
+        parquet_file_path=str(tfidf_enhanced_path.resolve())
+    )
+
+    tfidf_aggregator.save_category_demographics_to_parquet(
+        filename=".data/tables/tfidf/category_demographics_aggregated.parquet"
+    )
+    tfidf_aggregator.save_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/tfidf/category_subcategory_demographics_aggregated.parquet"
+    )
+    tfidf_aggregator.save_biased_category_demographics_to_parquet(
+        filename=".data/tables/tfidf/biased_category_demographics_aggregated.parquet"
+    )
+    tfidf_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+        filename=".data/tables/tfidf/biased_category_subcategory_demographics_aggregated.parquet"
     )
 
 
