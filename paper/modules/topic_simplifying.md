@@ -10,21 +10,21 @@ The topic reduction process incorporated an automated taxonomy acquisition syste
 
 #### 6.4.2 Word Embedding Model Selection and Configuration
 
-The semantic mapping process relies on pre-trained word embedding models to capture semantic relationships between extracted topic terms and taxonomy categories. We selected the `GloVe Twitter 200-dimensional` model as our primary embedding source [pennington2014glove], with the GloVe Wikipedia Gigaword 50-dimensional model serving as a secondary option [pennington2014glove]. The secondary option was used when there were technical issues in using the primary option. The Twitter-trained model was chosen specifically for its relevance to informal, conversational content, similar to our source data.
+The semantic mapping process relies on pre-trained word embedding models to capture semantic relationships between extracted topic terms and taxonomy categories. We selected the `GloVe Twitter 200-dimensional` model as our primary embedding source [barbieri-etal-2020-tweeteval], with the GloVe Wikipedia Gigaword 50-dimensional model serving as a secondary option [pennington2014glove]. The secondary option was used when there were technical issues in using the primary option. The Twitter-trained model was chosen specifically for its relevance to informal, conversational content, similar to our source data.
 
-The GloVe (Global Vectors for Word Representation) approach was found to be a standard method in text mining [?]. Unlike context-dependent embeddings, GloVe vectors maintain consistent representations across different contexts, enabling reliable similarity computations for topic mapping. The Twitter training corpus ensures familiarity with informal language patterns, abbreviations, and colloquialisms prevalent in blog content.
+The GloVe (Global Vectors for Word Representation) approach was found to be a standard method in unsupervised text mining [schnabel-etal-2015-evaluation]. Unlike context-dependent embeddings, GloVe vectors maintain consistent representations across different contexts, enabling reliable similarity computations for topic mapping. The Twitter training corpus ensures familiarity with informal language patterns, abbreviations, and colloquialisms prevalent in blog content.
 
 We have handled the vocabulary coverage limitations through a multi-stage word lookup process. For each input term, the system attempts retrieval using the normalized form (lowercase with underscores converted to spaces), the original form, and alternative representations. This meant we were able to maximize vocabulary coverage while maintaining semantic integrity.
 
 #### 6.4.3 Semantic Similarity Computation Framework
 
-The core mapping mechanism employs cosine similarity to quantify semantic relationships between topic representations and taxonomy categories. For individual words, the system directly retrieves pre-trained embeddings where available. For multi-word phrases or compound terms, we implement an averaging-based composition method that computes the mean of constituent word embeddings [?].
+The core mapping mechanism employs cosine similarity to quantify semantic relationships between topic representations and taxonomy categories. For individual words, the system directly retrieves pre-trained embeddings where available. For multi-word phrases or compound terms, we implement an averaging-based composition method that computes the mean of constituent word embeddings.
 
 The cosine similarity metric is computed using the standard formula:
 
 > similarity(A,B) = (A · B) / (||A|| × ||B||)
 
-where A represents the topic embedding vector and B represents the taxonomy category embedding vector. This metric provides values between -1 and 1, with higher values indicating stronger semantic similarity. The choice of cosine similarity over alternative distance metrics (such as Euclidean distance) reflects its effectiveness in high-dimensional spaces and its invariance to vector magnitude [?].
+where A represents the topic embedding vector and B represents the taxonomy category embedding vector. This metric provides values between -1 and 1, with higher values indicating stronger semantic similarity. The choice of cosine similarity was that it was found to be effective in high-dimensional spaces [zhelezniak-etal-2019-correlation] [kgosietsile2025cosine].
 
 To optimize computational efficiency, all taxonomy term embeddings are precomputed during system initialization. This precomputation strategy reduces the similarity calculation overhead from O(nm) to O(n), where n represents the number of input topics and m represents the number of taxonomy categories. The precomputed embeddings are stored in memory-efficient arrays, enabling vectorized similarity calculations across entire taxonomies.
 

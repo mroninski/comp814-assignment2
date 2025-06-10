@@ -86,23 +86,33 @@
 - Cross-validation strategy for demographic subsets
 
 ## 8. Results and Analysis
-### 8.1 Overall Topic Distribution
-- Top topics across entire dataset
-- Topic frequency and quality scores
-- Word clouds or visualization of major themes
+### 8.1 General Results
+- Transformer-LDA Results
+- TF-IDF Results
+#### 8.1.1 Gender-Based Analysis
+- Transformer-LDA Results
+- TF-IDF Results
 
-### 8.2 Demographic-Specific Results
+#### 8.1.2 Age-Based Analysis
+- Transformer-LDA Results
+- TF-IDF Results
+
+#### 8.1.3 Student Population
+- Transformer-LDA Results
+- TF-IDF Results
+
+### 8.2 Demographic Specificity Score Results
 #### 8.2.1 Gender-Based Analysis
-- Male vs. Female topic differences
-- Statistical significance testing
+- Transformer-LDA Results
+- TF-IDF Results
 
 #### 8.2.2 Age-Based Analysis
-- Under 20 vs. Over 20 comparisons
-- Generational topic preferences
+- Transformer-LDA Results
+- TF-IDF Results
 
 #### 8.2.3 Student Population
-- Unique topics for student demographic
-- Comparison with general population
+- Transformer-LDA Results
+- TF-IDF Results
 
 ### 8.3 Method Comparison
 - TF-IDF vs. Transformer-LDA performance
@@ -112,15 +122,11 @@
   - The top topics were always the same, so we had to identify the most relevant topics for each demographic.
     - These would be the topics that are have more posts on that demographic compared to the rest of the demographics.
 
-### 8.4 Example Topic Clauses
-- Representative clauses for each demographic's top 2 topics
-- Context and interpretation
-
 ## 9. Discussion
 ### 9.1 Key Findings
 - Most significant demographic differences
 - Unexpected topic discoveries
-- Business implications for innovation
+- Business implications based on the results
 
 ### 9.2 Method Strengths and Limitations
 - When TF-IDF excels vs. Transformer-LDA
