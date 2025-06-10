@@ -280,7 +280,7 @@ def map_lda_results_to_taxonomy(
     min_similarity: float = 0.50,
 ) -> Dict[str, float]:
     """
-    Map LDA analysis results to taxonomy categories using weighted word embeddings.
+    Map `TF-IDF + LDA + Tranformer` analysis results to taxonomy categories using weighted word embeddings.
 
     Args:
         mapper: TopicTaxonomyMapper instance

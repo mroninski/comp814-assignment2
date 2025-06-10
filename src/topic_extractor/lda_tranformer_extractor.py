@@ -354,14 +354,15 @@ class TransformerEnhancedLDA:
         # capturing nuanced themes in short texts. min_df=2 helps filter out noise by
         # ignoring terms that appear in only one semantic document chunk.
         vectorizer = TfidfVectorizer(
-            max_features=1000,
-            ngram_range=(1, 3),
-            min_df=2,
-            max_df=0.85,
-            stop_words="english",
-            lowercase=True,
-            sublinear_tf=True,
-            smooth_idf=True,
+            max_features=1000,  # Rich vocabulary for nuanced themes
+            ngram_range=(
+                1,
+                3,
+            ),  # Captures phrases like "girl friend", "computing class"
+            min_df=2,  # Word must appear in ≥2 documents (noise filtering)
+            max_df=0.85,  # Ignore words in >85% of docs (too common)
+            sublinear_tf=True,  # Dampens effect of very high frequencies
+            smooth_idf=True,  # Prevents divide-by-zero for rare terms
         )
 
         try:

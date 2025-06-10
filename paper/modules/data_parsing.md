@@ -15,14 +15,8 @@ Transforming all of the ampersands to `&amp;` ensures that the XML parser can co
 
 ### Demographic Segmentation Strategy
 
-The demographic segmentation approach leverages metadata embedded within filenames, a characteristic of this dataset that provides access to blogger demographic information [schler2006effects]. The filename structure follows a consistent pattern encoding scraping timestamp, gender, age, industry, and astrological sign/horroscope, separated by period delimiters.
+The demographic segmentation approach leverages metadata embedded within filenames [schler2006effects]. The filename structure follows a consistent pattern encoding scraping timestamp, gender, age, industry, and astrological sign/horroscope, separated by period delimiters.
 
-The demographic extraction pipeline utilizes Polars' string manipulation to parse the structured filename format efficiently. The implementation employs vectorized string operations that process all 19,320 filenames simultaneously, providing significant performance advantages over iterative parsing approaches. The string splitting operation on period delimiters ensures reliable metadata extraction while maintaining data integrity through explicit column mapping:
-
-> pl.col("filename").str.split(".").list.get(0).alias("scrapping_timestamp")
-> pl.col("filename").str.split(".").list.get(1).alias("gender")  
-> pl.col("filename").str.split(".").list.get(2).alias("age")
-
-The demographic categorization strategy addresses the assignment's specific requirements for analyzing five distinct population segments: males, females, age brackets (≤20 and >20), students, and the complete population. The age threshold of 20 years was selected to capture the transition from adolescent to adult content preferences, particularly relevant in the early 2000s context when this age represented a critical digital native transition point [?].
+The demographic categorization strategy addresses the assignment's specific requirements for analyzing five distinct population segments: males, females, age brackets (≤20 and >20), students, and the complete population.
 
 It was identified that the data contained datetimes that were in other languages, even if the content was in english. To ensure we were processing all English speaking blogs, we utilized the dataparser python library, similarly to [detelich2019large]. The temporal parsing implementation addresses the multilingual date formats present in the original dataset through dateparser's fuzzy matching capabilities. In this identification and analysis, it was also identified that some blogs were not in english, which posed the possibility of impacting testing and development, as well as the final outcome. To fix this issue, in the Data Transformation part of the process, we implemented a method to identify the language of the post.
