@@ -1,28 +1,35 @@
-## Methodology
+### Data Extraction and Pre-Preprocessing
 
-### Data Description and Preprocessing
-
-The experimental dataset consists of 19,320 XML-formatted blog posts collected from an anonymous blogging platform spanning the years 2001 to 2004, representing a critical period in early internet discourse and social media evolution [alves2021evolution]. This dataset presents unique challenges characteristic of early web content, including inconsistent encoding standards, varied HTML artifacts, and the informal linguistic patterns typical of nascent online communication platforms [zabotnova2018internet]. The temporal significance of this dataset cannot be understated, as it captures authentic user-generated content from the formative years of blogging culture, when users exhibited less standardized writing conventions and employed more experimental digital communication styles compared to contemporary social media platforms [?].
+The experimental dataset consists of 19,320 XML-formatted blog posts collected from an anonymous blogging platform spanning the years 2001 to 2004, representing a critical period in early internet discourse and social media evolution [alves2021evolution]. This dataset presents unique challenges characteristic of early web content, including inconsistent encoding standards, varied HTML artifacts, and the informal linguistic patterns typical of nascent online communication platforms [zabotnova2018internet]. The timerange of the dataset captures user-generated content from the formative years of blogging culture, when users exhibited less standardized writing conventions and employed experimental digital communication styles.
 
 The data processing pipeline was architected using Polars, a high-performance DataFrame library specifically chosen for its memory-efficiency and safety and computational speed when handling datasets [nahrstedt2024empirical]. Unlike traditional pandas-based approaches, Polars employs a lazy evaluation strategy and utilizes Apache Arrow's columnar memory format, which provides significant performance advantages when processing the 19,320 files in our corpus. This choice was particularly crucial given the computational intensity of subsequent transformer-based analysis steps, where memory management becomes a limiting factor in scalability. The lazy evaluation paradigm allows for query optimization across the entire processing pipeline, reducing memory footprint compared to equivalent pandas operations on datasets of this magnitude [nahrstedt2024empirical].
 
-The XML parsing implementation required careful consideration of data quality issues common to web content. We implemented a parsing strategy using BeautifulSoup's XML parser. This decision was informed by preliminary manual analysis revealing that files contained unescaped ampersands, malformed entity references, and incomplete tag structures typical of early content management systems [?]. The implementation incorporates a preprocessing step that normalizes common XML violations through regex-based entity correction, specifically targeting unescaped ampersand characters that frequently appear in informal blog writing:
+The XML parsing implementation required careful consideration of data quality issues common to web content. We implemented a parsing strategy using BeautifulSoup's XML parser. This decision was informed by preliminary manual analysis revealing that files contained unescaped ampersands, malformed entity references, and incomplete tag structures. The implementation incorporates a preprocessing step that normalizes common XML violations through regular expression based entity correction.
 
-> file_content = re.sub(r"&(?!amp;|lt;|gt;|apos;|quot;)", "&amp;", file_content)
+The demographic segmentation approach leverages metadata embedded within filenames [schler2006effects]. The filename structure follows a consistent pattern encoding scraping timestamp, gender, age, industry, and astrological sign/horroscope, separated by period delimiters.
 
-Transforming all of the ampersands to `&amp;` ensures that the XML parser can correctly parse the file, and we can easily remove it afterwards through the data transformation and cleanup.
-
-
-### Demographic Segmentation Strategy
-
-The demographic segmentation approach leverages metadata embedded within filenames, a characteristic of this dataset that provides access to blogger demographic information [schler2006effects]. The filename structure follows a consistent pattern encoding scraping timestamp, gender, age, industry, and astrological sign/horroscope, separated by period delimiters.
-
-The demographic extraction pipeline utilizes Polars' string manipulation to parse the structured filename format efficiently. The implementation employs vectorized string operations that process all 19,320 filenames simultaneously, providing significant performance advantages over iterative parsing approaches. The string splitting operation on period delimiters ensures reliable metadata extraction while maintaining data integrity through explicit column mapping:
-
-> pl.col("filename").str.split(".").list.get(0).alias("scrapping_timestamp")
-> pl.col("filename").str.split(".").list.get(1).alias("gender")  
-> pl.col("filename").str.split(".").list.get(2).alias("age")
-
-The demographic categorization strategy addresses the assignment's specific requirements for analyzing five distinct population segments: males, females, age brackets (≤20 and >20), students, and the complete population. The age threshold of 20 years was selected to capture the transition from adolescent to adult content preferences, particularly relevant in the early 2000s context when this age represented a critical digital native transition point [?].
+The demographic categorization strategy addresses the assignment's specific requirements for analyzing five distinct population segments: males, females, age brackets (≤20 and >20), students, and the complete population.
 
 It was identified that the data contained datetimes that were in other languages, even if the content was in english. To ensure we were processing all English speaking blogs, we utilized the dataparser python library, similarly to [detelich2019large]. The temporal parsing implementation addresses the multilingual date formats present in the original dataset through dateparser's fuzzy matching capabilities. In this identification and analysis, it was also identified that some blogs were not in english, which posed the possibility of impacting testing and development, as well as the final outcome. To fix this issue, in the Data Transformation part of the process, we implemented a method to identify the language of the post.
+
+# Data Transformation
+
+The preprocessing architecture employs a comprehensive data transformation pipeline. This step was focused on indetifying the language of the post, so that we can filter out non-english posts. It also removed all the HTML tags, and other artifacts that were present in the posts and metadata of the files.
+
+To detect the language in the blog posts, we used the `langdetect` library, which implements the  classification through a Naive Bayes classifier [gargova2022evaluation]. This choice was motivated by the international nature of blogging platforms and social media, where content could appear in multiple languages. The langdetect library was selected over alternatives such as spaCy's language detection due to its robust performance on short text segments, which is particularly relevant for blog posts that may contain brief entries or fragmented thoughts.
+
+The language detection process incorporates several defensive programming strategies to handle edge cases common in blog data. Text segments shorter than three characters are automatically classified as "unknown" to prevent false positives, while content containing fewer than ten characters after cleaning is similarly filtered to ensure reliable detection accuracy. 
+
+The text cleaning pipeline addresses specific artifacts common in early web content through a multi-stage normalization process. HTML entity decoding handles common entities such as &amp;, &lt;, &gt;, &quot;, &#39;, &ndash;, and &mdash; that frequently appear. The removal of "urlLink" strings addresses a specific artifact pattern observed in the dataset where hyperlinks were replaced with placeholder text during the original data collection process.
+
+The whitespace normalization process consolidates multiple consecutive spaces into single spaces and removes leading/trailing whitespace, addressing formatting inconsistencies that arise from HTML-to-text conversion processes. This standardization is crucial for downstream tokenization accuracy, as irregular spacing patterns can lead to token boundary errors and artificially inflate vocabulary size [hacohen2020influence].
+
+The core NLP preprocessing pipeline leverages the Natural Language Toolkit (NLTK) framework, chosen for its linguistic resource availability and ease of implementation [bird2006nltk]. The tokenization process uses NLTK's Punkt tokenizer, which divides a body of work into a series of sentences using their pre-trained model for English. Punkt can be highly accurate [sanchez2019sentence]. This is particularly valuable for blog content, which often contains non-standard punctuation, abbreviations, and formatting that can challenge rule-based tokenizers.
+
+Stopword removal utilizes NLTK's "English" stopwords corpus, encompassing 179 common English words that typically carry minimal semantic weight in topic modeling contexts [yogish2019review]. Stopwords were removed in order to prioritize the most important words in the post, and to increase the chances of distinctinct topics being identified.
+
+Lemmatization, the process of reducing words to their canonical forms, was implemented using NLTK's WordNetLemmatizer, which implements a morphological analysis approach based on the WordNet lexical database [khyani2021interpretation]. This choice over stemming algorithms such as Porter or Snowball stemming was motivated by industry use and the speed of the lemmatization process.
+
+The preprocessing pipeline incorporates several design decisions. The use of Polars' lazy evaluation framework defers computation until explicitly materialized, enabling query optimization and memory usage reduction compared to eager evaluation approaches. This is particularly beneficial as it allows for out-of-the-box performance enhancements to the process, and the ability to keep the code the same, for both smaller testing pipelines and the full run processes.
+
+The modular design of the pipeline enables incremental processing and experimentation with different preprocessing configurations without requiring complete pipeline reexecution. This flexibility is particularly valuable for iterative refinement of preprocessing parameters based on downstream topic modeling performance, supporting the experimental methodology required for comprehensive comparison between topic extraction approaches.

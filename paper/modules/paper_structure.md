@@ -3,20 +3,20 @@
 ## 1. Title
 **Title:** "Comparative Analysis of Topic Extraction Methods for Early 2000s Blog Content Mining"
 
-## 2. Abstract (0.25 pages)
+## 2. Abstract
 - Brief overview of the blog mining task
 - Mention of two topic extraction strategies: TF-IDF and Transformer-Enhanced LDA
 - Key findings about the top topics identified in the dataset
 - Performance discussion due to the scalability of the process, as it would not scale
 
-## 3. Contributions (0.25 pages)
+## 3. Contributions
 **Section detailing individual contributions from each team member**
 - Data preprocessing and cleaning pipeline development (Pedro)
 - Implementation of topic extraction methods (Pedro + Kent)
 - Demographic segmentation and analysis (Pedro + Kent)
 - Results evaluation and documentation (Kent)
 
-## 4. Introduction (1 page)
+## 4. Introduction
 ### 4.1 Background and Motivation
 - Importance of understanding demographic-specific content trends
 - Value for product/service innovation based on blog analysis
@@ -29,11 +29,7 @@
 - Primary goal: Extract two most popular topics per demographic
 - Secondary goals: Compare extraction methods, understand demographic differences
 
-### 4.3 Paper Organization
-- Brief roadmap of remaining sections
-- Focus on the change from the assumed expectation to the reality of the task
-
-## 5. Literature Review (1.5 pages)
+## 5. Literature Review
 ### 5.1 Topic Modeling Approaches
 - Traditional methods: LSA, pLSA, basic LDA
 - Modern enhancements: Transformer-based models, semantic embeddings
@@ -49,37 +45,32 @@
 - Benefits of combining probabilistic models with embeddings
 - Recent applications in short-text analysis
 
-## 6. Methodology (3 pages)
+## 6. Methodology 
 ### 6.1 Data Description and Preprocessing
 - Dataset structure: XML files with metadata in filenames
 - Demographic distribution table (already provided)
 - Cleaning pipeline: HTML removal, tokenization, lemmatization
 - Handling of non-ASCII characters and noise
 
-### 6.2 Demographic Segmentation Strategy
-- Metadata extraction from filenames
-- Creation of five demographic groups
-- Data validation and consistency checks
-
-### 6.3 Topic Extraction Method 1: TF-IDF Approach
+### 6.2 Topic Extraction Method 1: TF-IDF Approach
 - Document segmentation using semantic boundaries
 - Phrase detection with Gensim
 - TF-IDF vectorization parameters (max_features=1000, ngram_range=(1,3))
 - Topic quality scoring and filtering
 
-### 6.4 Topic Extraction Method 2: Transformer-Enhanced LDA
+### 6.3 Topic Extraction Method 2: Transformer-Enhanced TF-IDF + LDA
 - Semantic document creation using spaCy
 - Integration of Sentence-BERT embeddings (all-mpnet-base-v2)
 - Adaptive topic number optimization via silhouette analysis
 - Semantic re-ranking of topic words using centroid similarity
 
-### 6.5 Topic Identification and Labeling
+### 6.4 Topic Identification and Labeling
 - Common post-processing pipeline for both methods
 - Generation of topic labels from top words
 - Extraction of clauses containing dominant topics
 - Quality-based filtering (threshold determination)
 
-## 7. Experimental Setup (1 page)
+## 7. Experimental Setup
 ### 7.1 Implementation Environment
 - Google Colab setup with drive mounting
 - Required libraries: spaCy, Gensim, scikit-learn, sentence-transformers
@@ -94,24 +85,34 @@
 - Hyperparameter tuning for both methods
 - Cross-validation strategy for demographic subsets
 
-## 8. Results and Analysis (2.5 pages)
-### 8.1 Overall Topic Distribution
-- Top topics across entire dataset
-- Topic frequency and quality scores
-- Word clouds or visualization of major themes
+## 8. Results and Analysis
+### 8.1 General Results
+- Transformer-LDA Results
+- TF-IDF Results
+#### 8.1.1 Gender-Based Analysis
+- Transformer-LDA Results
+- TF-IDF Results
 
-### 8.2 Demographic-Specific Results
+#### 8.1.2 Age-Based Analysis
+- Transformer-LDA Results
+- TF-IDF Results
+
+#### 8.1.3 Student Population
+- Transformer-LDA Results
+- TF-IDF Results
+
+### 8.2 Demographic Specificity Score Results
 #### 8.2.1 Gender-Based Analysis
-- Male vs. Female topic differences
-- Statistical significance testing
+- Transformer-LDA Results
+- TF-IDF Results
 
 #### 8.2.2 Age-Based Analysis
-- Under 20 vs. Over 20 comparisons
-- Generational topic preferences
+- Transformer-LDA Results
+- TF-IDF Results
 
 #### 8.2.3 Student Population
-- Unique topics for student demographic
-- Comparison with general population
+- Transformer-LDA Results
+- TF-IDF Results
 
 ### 8.3 Method Comparison
 - TF-IDF vs. Transformer-LDA performance
@@ -121,15 +122,11 @@
   - The top topics were always the same, so we had to identify the most relevant topics for each demographic.
     - These would be the topics that are have more posts on that demographic compared to the rest of the demographics.
 
-### 8.4 Example Topic Clauses
-- Representative clauses for each demographic's top 2 topics
-- Context and interpretation
-
-## 9. Discussion (1 page)
+## 9. Discussion
 ### 9.1 Key Findings
 - Most significant demographic differences
 - Unexpected topic discoveries
-- Business implications for innovation
+- Business implications based on the results
 
 ### 9.2 Method Strengths and Limitations
 - When TF-IDF excels vs. Transformer-LDA
@@ -147,7 +144,7 @@
 - Short text and sparse data handling
   - Lots of shorter posts which forced us to process the blogs in full, instead of per post as it would be more specific and could produce more relevant results based on time of posting.
 
-## 10. Conclusion and Future Work (0.75 pages)
+## 10. Conclusion and Future Work
 ### 10.1 Summary of Contributions
 - Successfully extracted demographic-specific topics
 - Comprehensive comparison of extraction methods
