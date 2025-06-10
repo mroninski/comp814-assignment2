@@ -12,9 +12,6 @@ The XML parsing implementation required careful consideration of data quality is
 
 Transforming all of the ampersands to `&amp;` ensures that the XML parser can correctly parse the file, and we can easily remove it afterwards through the data transformation and cleanup.
 
-
-### Demographic Segmentation Strategy
-
 The demographic segmentation approach leverages metadata embedded within filenames [schler2006effects]. The filename structure follows a consistent pattern encoding scraping timestamp, gender, age, industry, and astrological sign/horroscope, separated by period delimiters.
 
 The demographic categorization strategy addresses the assignment's specific requirements for analyzing five distinct population segments: males, females, age brackets (≤20 and >20), students, and the complete population.
