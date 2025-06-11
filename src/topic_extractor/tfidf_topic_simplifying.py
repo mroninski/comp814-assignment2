@@ -133,7 +133,7 @@ class IABTaxonomyFetcher:
         return taxonomy
 
 
-class TopicTaxonomyMapper:
+class TFIDFTaxonomyMapper:
     """Maps topic words to hierarchical taxonomy using word embeddings.
     Details on the model:
     https://github.com/piskvorky/gensim-data?tab=readme-ov-file
@@ -273,38 +273,33 @@ class TopicTaxonomyMapper:
         return similarities
 
 
-def map_lda_results_to_taxonomy(
-    mapper: TopicTaxonomyMapper,
-    lda_results: Dict[str, Any],
+def map_tfidf_results_to_taxonomy(
+    mapper: TFIDFTaxonomyMapper,
+    tfidf_results: Dict[str, Any],
     top_n: int = 25,
-    min_similarity: float = 0.50,
+    min_similarity: float = 0.10,
 ) -> Dict[str, float]:
     """
-    Map `TF-IDF + LDA + Tranformer` analysis results to taxonomy categories using weighted word embeddings.
+    Map TF-IDF analysis results to taxonomy categories using weighted word embeddings.
 
     Args:
-        mapper: TopicTaxonomyMapper instance
-        lda_results: Dictionary containing LDA analysis results
+        mapper: TFIDFTaxonomyMapper instance
+        tfidf_results: Dictionary containing TF-IDF analysis results
         top_n: Number of top taxonomy matches to return
+        min_similarity: Minimum semantic similarity to include in output
 
     Returns:
         Dictionary mapping "major:subtopic" to percentage similarity scores
     """
-    if not lda_results or "lda_results" not in lda_results:
-        logger.error("Invalid LDA results structure")
+    if not tfidf_results or "tfidf_results" not in tfidf_results:
+        logger.error("Invalid TF-IDF results structure")
         return {}
 
-    lda_data = lda_results["lda_results"]
+    tfidf_data = tfidf_results["tfidf_results"]
+    topics_to_analyze = tfidf_data.get("topics", [])
 
-    # Use high quality topics if available, otherwise all topics
-    if "high_quality_topics" in lda_data and lda_data["high_quality_topics"]:
-        topics_to_analyze = lda_data["high_quality_topics"]
-        logger.info(f"Using {len(topics_to_analyze)} high quality topics")
-    elif "topics" in lda_data and lda_data["topics"]:
-        topics_to_analyze = lda_data["topics"]
-        logger.info(f"Using all {len(topics_to_analyze)} topics")
-    else:
-        logger.error("No topics found in LDA results")
+    if not topics_to_analyze:
+        logger.error("No topics found in TF-IDF results")
         return {}
 
     all_results = {}
@@ -313,70 +308,57 @@ def map_lda_results_to_taxonomy(
         topic_id = topic.get("topic_id", "unknown")
         words = topic.get("words", [])
         weights = topic.get("weights", [])
-        coherence_scores = topic.get("coherence_scores", [])
         topic_quality = topic.get("topic_quality", 0.5)
+
+        # print(f"[DEBUG] Topic {topic_id} words: {words}")
+        # print(f"[DEBUG] Topic {topic_id} weights: {weights}")
 
         if not words or not weights or len(words) != len(weights):
             logger.warning(f"Topic {topic_id} has mismatched words/weights, skipping")
             continue
 
-        # Use coherence scores if available, otherwise use default values
-        if not coherence_scores or len(coherence_scores) != len(words):
-            coherence_scores = [0.5] * len(words)
-
-        # Select top words by weight (at least top 3)
-        word_data = list(zip(words, weights, coherence_scores))
+        word_data = list(zip(words, weights))
         word_data.sort(key=lambda x: x[1], reverse=True)
 
-        # Take top 60th percentile or minimum 3 words
+        # Take top 60th percentile or at least 3 words
         threshold = np.percentile(weights, 60) if len(weights) > 3 else min(weights)
         selected_data = [item for item in word_data if item[1] >= threshold]
-
         if len(selected_data) < 3:
             selected_data = word_data[:3]
 
         selected_words = [item[0] for item in selected_data]
         selected_weights = [item[1] for item in selected_data]
-        selected_coherence = [item[2] for item in selected_data]
 
-        logger.info(f"Topic {topic_id}: Using {len(selected_words)} words")
-
-        # Create weighted topic embedding
         topic_embedding = _create_weighted_embedding(
-            selected_words, selected_weights, selected_coherence, mapper
+            selected_words, selected_weights, None, mapper  # TF-IDF has no coherence
         )
 
         if topic_embedding is None:
             logger.warning(f"Topic {topic_id}: No valid embeddings found")
             continue
 
-        # Compute similarities with subtopics
         subtopic_similarities = mapper._compute_semantic_similarity(
             topic_embedding, mapper.subtopic_embeddings
         )
 
-        # Apply quality weighting and convert to results format
-        quality_multiplier = 0.5 + (topic_quality * 0.5)  # Scale to 0.5-1.0
+        quality_multiplier = 0.5 + (topic_quality * 0.5)
 
         for subtopic, similarity in subtopic_similarities.items():
             weighted_similarity = similarity * quality_multiplier
-
             if weighted_similarity < min_similarity:
                 continue
 
-            major_topic = mapper.subtopic_to_major[subtopic]
+            major_topic = mapper.subtopic_to_major.get(subtopic, "unknown")
             key = f"{major_topic}:{subtopic}"
             percentage = round(weighted_similarity * 100, 2)
 
-            # Keep highest score if duplicate keys exist
             if key not in all_results or percentage > all_results[key]:
                 all_results[key] = percentage
 
-    # Return top results sorted by score
     sorted_results = sorted(all_results.items(), key=lambda x: x[1], reverse=True)
     final_results = dict(sorted_results[:top_n])
 
-    logger.info(f"Mapped topics to {len(final_results)} taxonomy categories")
+    # logger.info(f"Mapped TF-IDF topics to {len(final_results)} taxonomy categories")
     return final_results
 
 
@@ -384,11 +366,14 @@ def _create_weighted_embedding(
     words: List[str],
     weights: List[float],
     coherence_scores: List[float],
-    mapper: TopicTaxonomyMapper,
+    mapper: TFIDFTaxonomyMapper,
 ) -> Optional[np.ndarray]:
     """Create weighted topic embedding combining LDA weights and coherence scores."""
     embeddings = []
     final_weights = []
+
+    if coherence_scores is None:
+        coherence_scores = [1.0] * len(words)
 
     for word, weight, coherence in zip(words, weights, coherence_scores):
         embedding = mapper._get_phrase_embedding(word)
@@ -410,72 +395,72 @@ def _create_weighted_embedding(
     return np.average(embeddings, axis=0, weights=final_weights)
 
 
-def map_tfidf_results_to_taxonomy(
-    mapper: TopicTaxonomyMapper,
-    tfidf_results: Dict[str, Any],
-    top_n: int = 25,
-    min_similarity: float = 0.50,
-) -> Dict[str, float]:
-    """
-    Map TF-IDF topic extraction results to taxonomy using semantic similarity.
-    """
-    if not tfidf_results or "tfidf_results" not in tfidf_results:
-        logger.error("Invalid TF-IDF results structure")
-        return {}
-
-    topics_to_analyze = tfidf_results["tfidf_results"].get("topics", [])
-    if not topics_to_analyze:
-        logger.warning("No topics found in TF-IDF results")
-        return {}
-
-    all_results = {}
-
-    for topic in topics_to_analyze:
-        topic_id = topic.get("topic_id", "unknown")
-        words = topic.get("words", [])
-        weights = topic.get("weights", [])
-        topic_quality = topic.get("topic_quality", 0.5)
-        coherence_scores = [0.5] * len(words)  # fallback, TF-IDF doesn't include this
-
-        if not words or not weights or len(words) != len(weights):
-            logger.warning(f"Topic {topic_id} has invalid format, skipping")
-            continue
-
-        # Use same logic for top words as LDA mapping
-        word_data = list(zip(words, weights, coherence_scores))
-        word_data.sort(key=lambda x: x[1], reverse=True)
-        threshold = np.percentile(weights, 60) if len(weights) > 3 else min(weights)
-        selected_data = [item for item in word_data if item[1] >= threshold]
-        if len(selected_data) < 3:
-            selected_data = word_data[:3]
-
-        selected_words = [item[0] for item in selected_data]
-        selected_weights = [item[1] for item in selected_data]
-        selected_coherence = [item[2] for item in selected_data]
-
-        topic_embedding = _create_weighted_embedding(
-            selected_words, selected_weights, selected_coherence, mapper
-        )
-
-        if topic_embedding is None:
-            continue
-
-        subtopic_similarities = mapper._compute_semantic_similarity(
-            topic_embedding, mapper.subtopic_embeddings
-        )
-
-        quality_multiplier = 0.5 + (topic_quality * 0.5)
-
-        for subtopic, similarity in subtopic_similarities.items():
-            weighted_similarity = similarity * quality_multiplier
-            if weighted_similarity < min_similarity:
-                continue
-
-            major_topic = mapper.subtopic_to_major[subtopic]
-            key = f"{major_topic}:{subtopic}"
-            percentage = round(weighted_similarity * 100, 2)
-
-            if key not in all_results or percentage > all_results[key]:
-                all_results[key] = percentage
-
-    return dict(sorted(all_results.items(), key=lambda x: x[1], reverse=True)[:top_n])
+# def map_tfidf_results_to_taxonomy(
+#     mapper: TFIDFTaxonomyMapper,
+#     tfidf_results: Dict[str, Any],
+#     top_n: int = 25,
+#     min_similarity: float = 0.50,
+# ) -> Dict[str, float]:
+#     """
+#     Map TF-IDF topic extraction results to taxonomy using semantic similarity.
+#     """
+#     if not tfidf_results or "tfidf_results" not in tfidf_results:
+#         logger.error("Invalid TF-IDF results structure")
+#         return {}
+#
+#     topics_to_analyze = tfidf_results["tfidf_results"].get("topics", [])
+#     if not topics_to_analyze:
+#         logger.warning("No topics found in TF-IDF results")
+#         return {}
+#
+#     all_results = {}
+#
+#     for topic in topics_to_analyze:
+#         topic_id = topic.get("topic_id", "unknown")
+#         words = topic.get("words", [])
+#         weights = topic.get("weights", [])
+#         topic_quality = topic.get("topic_quality", 0.5)
+#         coherence_scores = [0.5] * len(words)  # fallback, TF-IDF doesn't include this
+#
+#         if not words or not weights or len(words) != len(weights):
+#             logger.warning(f"Topic {topic_id} has invalid format, skipping")
+#             continue
+#
+#         # Use same logic for top words as LDA mapping
+#         word_data = list(zip(words, weights, coherence_scores))
+#         word_data.sort(key=lambda x: x[1], reverse=True)
+#         threshold = np.percentile(weights, 60) if len(weights) > 3 else min(weights)
+#         selected_data = [item for item in word_data if item[1] >= threshold]
+#         if len(selected_data) < 3:
+#             selected_data = word_data[:3]
+#
+#         selected_words = [item[0] for item in selected_data]
+#         selected_weights = [item[1] for item in selected_data]
+#         selected_coherence = [item[2] for item in selected_data]
+#
+#         topic_embedding = _create_weighted_embedding(
+#             selected_words, selected_weights, selected_coherence, mapper
+#         )
+#
+#         if topic_embedding is None:
+#             continue
+#
+#         subtopic_similarities = mapper._compute_semantic_similarity(
+#             topic_embedding, mapper.subtopic_embeddings
+#         )
+#
+#         quality_multiplier = 0.5 + (topic_quality * 0.5)
+#
+#         for subtopic, similarity in subtopic_similarities.items():
+#             weighted_similarity = similarity * quality_multiplier
+#             if weighted_similarity < min_similarity:
+#                 continue
+#
+#             major_topic = mapper.subtopic_to_major[subtopic]
+#             key = f"{major_topic}:{subtopic}"
+#             percentage = round(weighted_similarity * 100, 2)
+#
+#             if key not in all_results or percentage > all_results[key]:
+#                 all_results[key] = percentage
+#
+#     return dict(sorted(all_results.items(), key=lambda x: x[1], reverse=True)[:top_n])
