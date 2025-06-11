@@ -1,5 +1,11 @@
+import argparse
+import gc
 import json
 import logging
+import shutil
+import sys
+import time
+from datetime import datetime
 from logging import getLogger
 from pathlib import Path
 import time
@@ -12,6 +18,8 @@ import shutil
 import os
 
 import polars as pl
+import psutil
+from tqdm import tqdm
 
 from topic_extractor.data_extraction import BlogDataProcessor
 from topic_extractor.data_transformation import PostsTableTransformation
@@ -30,7 +38,7 @@ for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARN,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -79,19 +87,43 @@ def process_lda_with_progress(
     """
     start_time = time.time()
 
+    # Create output directory
+    output_path = Path(output_base_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Check for already processed batches to support resuming
+    processed_files = list(output_path.glob("*.parquet"))
+    if processed_files:
+        logger.info(
+            f"Found {len(processed_files)} existing batch files in {output_path}, attempting to resume."
+        )
+        processed_df = pl.scan_parquet(processed_files)
+        processed_file_ids = processed_df.select("file_id").unique()
+        df = df.join(processed_file_ids, on="file_id", how="anti")
+
     # Collect the data to work with concrete operations
     logger.info("Collecting data for batch processing...")
     data = df.collect()
     total_records = len(data)
 
-    logger.info(f"Starting enhanced LDA processing for {total_records} records")
+    if total_records == 0:
+        if processed_files:
+            logger.info("No new records to process. All data appears to be processed.")
+            logger.info("Combining existing batches to create final result.")
+            final_result = pl.read_parquet(processed_files)
+            final_result.write_parquet(
+                final_output_path, compression="snappy", statistics=True
+            )
+            logger.info(f"Final combined result saved to {final_output_path}")
+            return final_result.lazy()
+        else:
+            logger.warning("No data to process and no previous batches found.")
+            return pl.LazyFrame()
+
+    logger.info(f"Starting enhanced LDA processing for {total_records} new records")
     logger.info(
         f"Batch size: {batch_size}, Save frequency: every {save_frequency} batches"
     )
-
-    # Create output directory
-    output_path = Path(output_base_path)
-    output_path.mkdir(parents=True, exist_ok=True)
 
     # Initialize LDA model once
     logger.info("Initializing LDA model...")
@@ -103,9 +135,7 @@ def process_lda_with_progress(
 
     num_batches = (total_records + batch_size - 1) // batch_size
 
-    for batch_idx in range(num_batches):
-        batch_start_time = time.time()
-
+    for batch_idx in tqdm(range(num_batches)):
         # Calculate batch boundaries
         start_idx = batch_idx * batch_size
         end_idx = min((batch_idx + 1) * batch_size, total_records)
@@ -130,15 +160,6 @@ def process_lda_with_progress(
 
             batch_results.append(batch_with_lda)
 
-            # Memory management
-            batch_end_time = time.time()
-            batch_duration = batch_end_time - batch_start_time
-
-            logger.info(
-                f"Batch {batch_idx + 1} completed in {batch_duration:.2f}s "
-                f"({(end_idx - start_idx) / batch_duration:.1f} records/sec)"
-            )
-
             # Save intermediate results periodically
             if (batch_idx + 1) % save_frequency == 0 or batch_idx == num_batches - 1:
                 # Combine processed batches
@@ -150,7 +171,7 @@ def process_lda_with_progress(
                 # Save partition
                 partition_path = (
                     output_path
-                    / f"batch_{batch_idx + 1 - len(batch_results) + 1}_to_{batch_idx + 1}.parquet"
+                    / f"partition_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.parquet"
                 )
                 logger.info(f"Saving partition to {partition_path}")
                 combined_batch.write_parquet(partition_path, compression="snappy")
@@ -162,37 +183,20 @@ def process_lda_with_progress(
                 # Force garbage collection
                 gc.collect()
 
-                # Progress summary with memory monitoring
-                elapsed_time = time.time() - start_time
-                records_processed = end_idx
-                records_remaining = total_records - records_processed
-                avg_speed = records_processed / elapsed_time
-                eta_seconds = records_remaining / avg_speed if avg_speed > 0 else 0
-
-                # Memory usage
-                process = psutil.Process()
-                memory_mb = process.memory_info().rss / 1024 / 1024
-                memory_percent = process.memory_percent()
-
-                logger.info(
-                    f"Progress: {records_processed}/{total_records} "
-                    f"({100 * records_processed / total_records:.1f}%) | "
-                    f"Speed: {avg_speed:.1f} records/sec | "
-                    f"ETA: {eta_seconds / 60:.1f} minutes | "
-                    f"Memory: {memory_mb:.1f}MB ({memory_percent:.1f}%)"
-                )
-
         except Exception as e:
             logger.error(f"Error processing batch {batch_idx + 1}: {str(e)}")
             # Create error batch with empty LDA results
             error_batch = batch_data.with_columns(
                 pl.lit(
-                    json.dumps({
-                        "lda_results": {"topics": []},
-                        "words": set(),
-                        "topic_labels": [],
-                        "error": str(e),
-                    })
+                    json.dumps(
+                        {
+                            "lda_results": {"topics": []},
+                            "words": set(),
+                            "topic_labels": [],
+                            "error": str(e),
+                        },
+                        default=str,
+                    )
                 ).alias("lda_topics")
             )
             batch_results.append(error_batch)
@@ -200,10 +204,25 @@ def process_lda_with_progress(
 
     # Combine all results
     logger.info("Combining all processed batches...")
-    if len(all_results) > 1:
-        final_result = pl.concat(all_results, rechunk=True)
+
+    # Results from the current run
+    current_run_results = pl.concat(all_results, rechunk=True) if all_results else None
+
+    if processed_files:
+        logger.info("Loading previously processed batches to combine with new results.")
+        previous_results = pl.read_parquet(processed_files)
+        if current_run_results is not None:
+            final_result = pl.concat(
+                [previous_results, current_run_results], rechunk=True
+            )
+        else:
+            final_result = previous_results
     else:
-        final_result = all_results[0]
+        final_result = current_run_results
+
+    if final_result is None:
+        logger.warning("LDA processing finished, but no results were produced.")
+        return pl.LazyFrame()
 
     total_time = time.time() - start_time
     logger.info(
@@ -458,9 +477,9 @@ def main():
         blogs_lda_extracted_df = process_lda_with_progress(
             blogs_english_transformed_df,
             final_output_path=enhanced_lda_path,
-            batch_size=10,  # Small batches to show progress clearly
+            batch_size=50,  # Small batches to show progress clearly
             output_base_path=f".data/tables/lda_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}",
-            save_frequency=2,  # Save every 2 batches for frequent updates
+            save_frequency=1,  # Save every batche for frequent updates
         )
 
     if lda_taxonomy_df_path.exists():
