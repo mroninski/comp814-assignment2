@@ -15,7 +15,6 @@ from datetime import datetime
 import argparse
 import sys
 import shutil
-import os
 
 import polars as pl
 import psutil
