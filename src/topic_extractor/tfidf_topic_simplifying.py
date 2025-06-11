@@ -310,8 +310,8 @@ def map_tfidf_results_to_taxonomy(
         weights = topic.get("weights", [])
         topic_quality = topic.get("topic_quality", 0.5)
 
-        print(f"[DEBUG] Topic {topic_id} words: {words}")
-        print(f"[DEBUG] Topic {topic_id} weights: {weights}")
+        # print(f"[DEBUG] Topic {topic_id} words: {words}")
+        # print(f"[DEBUG] Topic {topic_id} weights: {weights}")
 
         if not words or not weights or len(words) != len(weights):
             logger.warning(f"Topic {topic_id} has mismatched words/weights, skipping")
@@ -358,7 +358,7 @@ def map_tfidf_results_to_taxonomy(
     sorted_results = sorted(all_results.items(), key=lambda x: x[1], reverse=True)
     final_results = dict(sorted_results[:top_n])
 
-    logger.info(f"Mapped TF-IDF topics to {len(final_results)} taxonomy categories")
+    # logger.info(f"Mapped TF-IDF topics to {len(final_results)} taxonomy categories")
     return final_results
 
 

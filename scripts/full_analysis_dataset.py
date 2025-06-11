@@ -376,7 +376,7 @@ def main():
     """
 
     # Number of blogs to process (0 for all) - using small number to show progress tracking
-    keep_rows = 10
+    keep_rows = 0
 
     # Path for processed raw data
     files_df_path = Path(".data/tables/files_df.parquet")
@@ -446,60 +446,60 @@ def main():
     # If we want to keep a limited number of blogs, we can do so here
     if keep_rows > 0:
         blogs_english_transformed_df = blogs_english_transformed_df.limit(keep_rows)
-
-    if enhanced_lda_path.exists():
-        logger.info("Loading enhanced LDA results from cache")
-        blogs_lda_extracted_df = pl.scan_parquet(enhanced_lda_path)
-
-    if not enhanced_lda_path.exists():
-        logger.info("Starting enhanced LDA processing with progress tracking")
-
-        # Use enhanced LDA processing with progress tracking
-        blogs_lda_extracted_df = process_lda_with_progress(
-            blogs_english_transformed_df,
-            final_output_path=enhanced_lda_path,
-            batch_size=10,  # Small batches to show progress clearly
-            output_base_path=f".data/tables/lda_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}",
-            save_frequency=2,  # Save every 2 batches for frequent updates
-        )
-
-    if lda_taxonomy_df_path.exists():
-        logger.info("Loading lda_taxonomy_df from cache")
-        blogs_lda_taxonomy_df = pl.scan_parquet(lda_taxonomy_df_path)
-    else:
-        taxonomy_mapper = TopicTaxonomyMapper()
-        logger.info("No lda_taxonomy_df found, creating it")
-
-        # Now we can map the extracted topics to the taxonomy
-        blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
-            pl.col("lda_topics")
-            .map_batches(
-                lambda x: process_taxonomy_batch(x, taxonomy_mapper),
-                return_dtype=pl.Utf8,
-            )
-            .alias("lda_taxonomy_classification"),
-        )
-
-        blogs_lda_taxonomy_df.sink_parquet(
-            path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
-        )
-
-    # Once saved, we can run the aggregation and analysis
-    lda_aggregator = TopicTaxonomyResultsAggregator(
-        parquet_file_path=str(lda_taxonomy_df_path.resolve())
-    )
-    lda_aggregator.save_category_demographics_to_parquet(
-        filename=".data/tables/lda/category_demographics_aggregated.parquet"
-    )
-    lda_aggregator.save_category_subcategory_demographics_to_parquet(
-        filename=".data/tables/lda/category_subcategory_demographics_aggregated.parquet"
-    )
-    lda_aggregator.save_biased_category_demographics_to_parquet(
-        filename=".data/tables/lda/biased_category_demographics_aggregated.parquet"
-    )
-    lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
-        filename=".data/tables/lda/biased_category_subcategory_demographics_aggregated.parquet"
-    )
+    #
+    # if enhanced_lda_path.exists():
+    #     logger.info("Loading enhanced LDA results from cache")
+    #     blogs_lda_extracted_df = pl.scan_parquet(enhanced_lda_path)
+    #
+    # if not enhanced_lda_path.exists():
+    #     logger.info("Starting enhanced LDA processing with progress tracking")
+    #
+    #     # Use enhanced LDA processing with progress tracking
+    #     blogs_lda_extracted_df = process_lda_with_progress(
+    #         blogs_english_transformed_df,
+    #         final_output_path=enhanced_lda_path,
+    #         batch_size=10,  # Small batches to show progress clearly
+    #         output_base_path=f".data/tables/lda_extracted_batches_{keep_rows if keep_rows > 0 else 'all'}",
+    #         save_frequency=2,  # Save every 2 batches for frequent updates
+    #     )
+    #
+    # if lda_taxonomy_df_path.exists():
+    #     logger.info("Loading lda_taxonomy_df from cache")
+    #     blogs_lda_taxonomy_df = pl.scan_parquet(lda_taxonomy_df_path)
+    # else:
+    #     taxonomy_mapper = TopicTaxonomyMapper()
+    #     logger.info("No lda_taxonomy_df found, creating it")
+    #
+    #     # Now we can map the extracted topics to the taxonomy
+    #     blogs_lda_taxonomy_df = blogs_lda_extracted_df.with_columns(
+    #         pl.col("lda_topics")
+    #         .map_batches(
+    #             lambda x: process_taxonomy_batch(x, taxonomy_mapper),
+    #             return_dtype=pl.Utf8,
+    #         )
+    #         .alias("lda_taxonomy_classification"),
+    #     )
+    #
+    #     blogs_lda_taxonomy_df.sink_parquet(
+    #         path=str(lda_taxonomy_df_path.resolve()), statistics=True, mkdir=True
+    #     )
+    #
+    # # Once saved, we can run the aggregation and analysis
+    # lda_aggregator = TopicTaxonomyResultsAggregator(
+    #     parquet_file_path=str(lda_taxonomy_df_path.resolve())
+    # )
+    # lda_aggregator.save_category_demographics_to_parquet(
+    #     filename=".data/tables/lda/category_demographics_aggregated.parquet"
+    # )
+    # lda_aggregator.save_category_subcategory_demographics_to_parquet(
+    #     filename=".data/tables/lda/category_subcategory_demographics_aggregated.parquet"
+    # )
+    # lda_aggregator.save_biased_category_demographics_to_parquet(
+    #     filename=".data/tables/lda/biased_category_demographics_aggregated.parquet"
+    # )
+    # lda_aggregator.save_biased_category_subcategory_demographics_to_parquet(
+    #     filename=".data/tables/lda/biased_category_subcategory_demographics_aggregated.parquet"
+    # )
 
     # === TF-IDF Processing Paths ===
 
