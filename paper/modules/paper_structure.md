@@ -40,7 +40,7 @@
 - Strengths in identifying distinctive terms
 - Limitations in capturing semantic relationships
 
-### 5.3 LDA and Neural Enhancements
+### 5.3 LDA-Transformer
 - Evolution from basic LDA to transformer-enhanced approaches
 - Benefits of combining probabilistic models with embeddings
 - Recent applications in short-text analysis
@@ -135,14 +135,12 @@
   - Transformer-LDA is incredibly heavy on the computational resources, and so it would not be feasible to run on a larger dataset.
 
 ### 9.3 Challenges Encountered
-- Data quality issues (HTML artifacts, encoding)
-  - The cleanup required
-  - Computational considerations due to the model sizes used for the LDA-Transformer method
 - Temporal aspects (2001-2004 content relevance)
   - Language used (Users were more likely to use slang and abbreviations in the early 2000s)
   - As the internet grew, more data was available, and so language models are not as effective to specific lingo to the beginning of the internet
 - Short text and sparse data handling
-  - Lots of shorter posts which forced us to process the blogs in full, instead of per post as it would be more specific and could produce more relevant results based on time of posting.
+  - Lots of shorter posts which forced us to process the blogs in full, instead of per post as it would be more specific and could produce more relevant results based on time of posting. This also meant the topic highlighting was at a blog level, instead of post level, meaning we were only keeping the N most distinct topics from a whole blog.
+- Topic Aggregation was our largest issue, as we were not able to find any meaninful way of aggregating the topics. The taxonomy approach improved the results vastly, but still produced issues in the way which 
 
 ## 10. Conclusion and Future Work
 ### 10.1 Summary of Contributions
